@@ -1,0 +1,23 @@
+[project]
+name = "binding"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "napari>=0.7.0",
+    "numpy>=1.26",
+    "pyqt6>=6.11.0",
+    "tifffile>=2024.1",
+    "typer>=0.25.1",
+]
+
+[project.scripts]
+binding = "binding.main:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/binding"]
