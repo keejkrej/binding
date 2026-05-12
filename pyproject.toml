@@ -8,6 +8,8 @@ dependencies = [
     "napari>=0.7.0",
     "numpy>=1.26",
     "pyqt6>=6.11.0",
+    "scikit-image>=0.26",
+    "scipy>=1.13",
     "tifffile>=2024.1",
     "typer>=0.25.1",
 ]
