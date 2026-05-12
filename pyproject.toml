@@ -10,9 +10,11 @@ dependencies = [
     "numpy>=1.26",
     "pyqt6>=6.11.0",
     "scikit-image>=0.26",
+    "spotiflow>=0.0.0",
     "scipy>=1.13",
     "tifffile>=2024.1",
     "typer>=0.25.1",
+    "torch>2.7"
 ]
 
 [project.scripts]
@@ -24,3 +26,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/binding"]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch", marker = "sys_platform != 'darwin'" }]
+torchvision = [{ index = "pytorch", marker = "sys_platform != 'darwin'" }]
