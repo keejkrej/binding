@@ -7,6 +7,7 @@ from binding.commands.analyze_membrane import analyze_membrane
 from binding.commands.binarize import binarize
 from binding.commands.label import label
 from binding.commands.label_membrane import label_membrane
+from binding.commands.segment import segment
 from binding.commands.spotiflow import spotiflow
 from binding.commands.plot import plot
 from binding.commands.show import show
@@ -30,6 +31,7 @@ app.command(name="analyze-membrane")(analyze_membrane)
 app.command()(show_labeled)
 app.command()(label)
 app.command(name="label-membrane")(label_membrane)
+app.command()(segment)
 app.command()(spotiflow)
 app.command()(show)
 app.command(name="show-result")(show_result)
