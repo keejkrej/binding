@@ -5,6 +5,7 @@ import typer
 from binding.commands.analyze import analyze
 from binding.commands.binarize import binarize
 from binding.commands.label import label
+from binding.commands.plot import plot
 from binding.commands.show import show
 from binding.commands.show_labeled import show_labeled
 
@@ -24,6 +25,7 @@ app.command()(analyze)
 app.command()(show_labeled)
 app.command()(label)
 app.command()(show)
+app.command()(plot)
 
 
 def main() -> None:
