@@ -13,6 +13,8 @@ from binding.commands.plot import plot
 from binding.commands.show import show
 from binding.commands.show_labeled import show_labeled
 from binding.commands.show_result import show_result
+from binding.commands.show_timeseries import show_timeseries
+from binding.commands.timeseries import timeseries
 
 app = typer.Typer(
     add_completion=False,
@@ -36,6 +38,8 @@ app.command()(spotiflow)
 app.command()(show)
 app.command(name="show-result")(show_result)
 app.command()(plot)
+app.command()(timeseries)
+app.command(name="show-timeseries")(show_timeseries)
 
 
 def main() -> None:
