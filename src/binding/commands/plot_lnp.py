@@ -8,10 +8,10 @@ from typing import Annotated
 import numpy as np
 import typer
 from matplotlib import patches
-
+from skimage.measure import find_contours
 
 from binding.commands.filter_spots import read_spot_csv
-from binding.core import load_roi_stack
+from binding.core import compute_cell_mask, load_roi_stack
 
 FILTERED_SPOT_FILE_RE = re.compile(
     r"^roi(?P<roi>\d+)_time(?P<time>\d+)_filtered\.csv$",
@@ -77,6 +77,87 @@ def auto_select_time(counts_by_roi: dict[int, tuple[list[float], list[int]]], ro
     )
 
 
+def intensity_to_radius(intensity: float) -> float:
+    """Map spot intensity to circle radius (linear: 2000 -> 2 px, 16000 -> 16 px)."""
+    s = float(intensity)
+    return float(np.clip(2.0 + 14.0 * (s - 2000.0) / 14000.0, 2.0, 16.0))
+
+
+def _load_spots_for_roi(filtered_dir: Path, roi: int, n_times: int) -> dict[int, list[dict[str, str]]]:
+    spots: dict[int, list[dict[str, str]]] = {}
+    for ti in range(n_times):
+        try:
+            p = resolve_spot_csv(filtered_dir, roi, ti)
+            _, rows = read_spot_csv(p)
+            spots[ti] = rows
+        except Exception:
+            spots[ti] = []
+    return spots
+
+
+def generate_b_movie(
+    input_dir: Path,
+    filtered_dir: Path,
+    position: int,
+    roi: int,
+    output_path: Path,
+    channel: int = 1,
+    fps: float = 12.0,
+) -> None:
+    """Create mp4 of figB (BF-derived contour + intensity-scaled spot circles) over time for one ROI."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt
+    from matplotlib.animation import FuncAnimation
+
+    fluo_stack = load_roi_stack(input_dir, position, roi, channel)
+    bf_stack = load_roi_stack(input_dir, position, roi, 0)
+    n_times = int(fluo_stack.shape[0])
+    spots_by_t = _load_spots_for_roi(filtered_dir, roi, n_times)
+    h, w = fluo_stack.shape[1:3] if fluo_stack.ndim == 3 else fluo_stack.shape[-2:]
+
+    dpi = 72
+    fig, ax = plt.subplots(figsize=(max(3.0, w / dpi), max(3.0, h / dpi)), dpi=dpi)
+    fig.patch.set_facecolor("black")
+    ax.set_facecolor("black")
+    ax.margins(0)
+
+    def _draw_frame(ti: int) -> None:
+        ax.clear()
+        fluo = np.asarray(fluo_stack[ti])
+        bf = np.asarray(bf_stack[ti], dtype=np.float64)
+        mask = compute_cell_mask(bf)
+        conts = find_contours(mask.astype(float), level=0.5)
+        # Pure black background - no raw fluorescence overlay
+        bg = np.zeros((h, w), dtype=np.float32)
+        ax.imshow(bg, cmap="gray", vmin=0, vmax=1, interpolation="nearest")
+        ax.set_facecolor("black")
+        for cont in conts:
+            if len(cont) > 1:
+                ax.plot(cont[:, 1], cont[:, 0], color="#00f0ff", linewidth=1.6, alpha=0.95)
+        for row in spots_by_t.get(ti, []):
+            x = float(row["x"])
+            y = float(row["y"])
+            r = intensity_to_radius(float(row.get("intensity", 5000.0)))
+            ax.add_patch(patches.Circle((x, y), radius=r, fill=False, edgecolor="#ffeb3b", linewidth=1.2))
+        ax.set_xlim(-0.5, w - 0.5)
+        ax.set_ylim(h - 0.5, -0.5)
+        ax.set_aspect("equal")
+        ax.axis("off")
+        ax.text(0.01, 0.99, f"roi{roi:02d} t={ti}", transform=ax.transAxes, color="#cccccc", fontsize=7, va="top")
+
+    def update(ti: int):
+        _draw_frame(ti)
+        return []
+
+    _draw_frame(0)  # init view
+    ani = FuncAnimation(fig, update, frames=n_times, interval=1000.0 / fps, blit=False, repeat=False)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ani.save(str(output_path), writer="ffmpeg", fps=fps, dpi=dpi, extra_args=["-vcodec", "libx264", "-pix_fmt", "yuv420p", "-crf", "18"])
+    plt.close(fig)
+
+
 def resolve_spot_csv(filtered_dir: Path, roi: int, time_index: int) -> Path:
     path = filtered_dir / f"roi{roi:02d}_time{time_index:09d}_filtered.csv"
     if not path.exists():
@@ -111,27 +192,44 @@ def render_fluorescence(axis, image: np.ndarray) -> None:
     axis.axis("off")
 
 
-def render_detections(axis, image_shape: tuple[int, int], rows: list[dict[str, str]]) -> None:
-    background = np.zeros(image_shape, dtype=np.float32)
+def render_detections(
+    axis,
+    image: np.ndarray,
+    rows: list[dict[str, str]],
+    contour_coords: list[np.ndarray] | None = None,
+) -> None:
+    """Render fig B purely: black background + cell contour from BF + circles sized by spot intensity.
+    No raw fluorescence data overlay.
+    """
+    # Pure black background via zero image (ensures black pixels, not just facecolor)
+    h, w = image.shape
+    background = np.zeros((h, w), dtype=np.float32)
     axis.imshow(background, cmap="gray", vmin=0, vmax=1, interpolation="nearest")
-    axis.set_xlim(-0.5, image_shape[1] - 0.5)
-    axis.set_ylim(image_shape[0] - 0.5, -0.5)
+    axis.set_facecolor("black")
+    axis.set_xlim(-0.5, w - 0.5)
+    axis.set_ylim(h - 0.5, -0.5)
     axis.set_aspect("equal")
     axis.axis("off")
 
+    # cell contour (cyan)
+    if contour_coords:
+        for cont in contour_coords:
+            if len(cont) > 1:
+                axis.plot(cont[:, 1], cont[:, 0], color="#00f0ff", linewidth=1.8, alpha=0.95)
+
+    # spots as circles, radius from intensity
     for row in rows:
         x = float(row["x"])
         y = float(row["y"])
-        radius = 4.0
-        if "fwhm" in row and row["fwhm"] != "":
-            radius = max(3.0, float(row["fwhm"]) * 1.5)
+        intens = float(row.get("intensity", 5000.0))
+        radius = intensity_to_radius(intens)
         axis.add_patch(
             patches.Circle(
                 (x, y),
                 radius=radius,
                 fill=False,
-                edgecolor="#f4f4f4",
-                linewidth=1.4,
+                edgecolor="#ffeb3b",
+                linewidth=1.3,
             )
         )
 
@@ -194,12 +292,25 @@ def plot_lnp(
             help="Time axis unit. Counts CSV stores time_real in seconds.",
         ),
     ] = "min",
+    movies: Annotated[
+        Path | None,
+        typer.Option(
+            "--movies",
+            help="Directory to write per-ROI figB mp4 movies (one per roi). If set, generates movies of B viz for all ROIs after the static figure.",
+        ),
+    ] = None,
 ) -> None:
     try:
         rois, grouped = read_counts_csv(counts_csv)
         selected_roi = roi if roi is not None else auto_select_roi(grouped)
         selected_time = time if time is not None else auto_select_time(grouped, selected_roi)
-        image = load_roi_stack(input_dir, position, selected_roi, channel)[selected_time]
+        fluo_stack = load_roi_stack(input_dir, position, selected_roi, channel)
+        bf_stack = load_roi_stack(input_dir, position, selected_roi, 0)
+        image = fluo_stack[selected_time]
+        bf_frame = np.asarray(bf_stack[selected_time], dtype=np.float64)
+        mask = compute_cell_mask(bf_frame)
+        # find_contours returns (row, col) i.e. (y, x) coords
+        contour_coords = find_contours(mask.astype(float), level=0.5)
         spot_csv = resolve_spot_csv(filtered_dir, selected_roi, selected_time)
         _, spot_rows = read_spot_csv(spot_csv)
     except ValueError as exc:
@@ -219,7 +330,7 @@ def plot_lnp(
 
     render_fluorescence(axis_d, np.asarray(image))
     add_panel_label(axis_d, "A")
-    render_detections(axis_e, image.shape, spot_rows)
+    render_detections(axis_e, np.asarray(image), spot_rows, contour_coords=list(contour_coords))
     add_panel_label(axis_e, "B")
 
     median_times: list[float] | None = None
@@ -278,3 +389,12 @@ def plot_lnp(
         f"Saved {output} with roi={selected_roi}, time={selected_time}, "
         f"spots={len(spot_rows)}, cells={len(rois)}"
     )
+
+    if movies is not None:
+        movies = Path(movies)
+        for r in rois:
+            out_mp4 = movies / f"roi{r:02d}_figB.mp4"
+            try:
+                generate_b_movie(input_dir, filtered_dir, position, r, out_mp4, channel=channel)
+            except Exception as exc:
+                typer.echo(f"Warning: failed movie for roi {r}: {exc}")

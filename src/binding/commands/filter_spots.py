@@ -74,7 +74,7 @@ def filter_spots(
     min_intensity: Annotated[
         float | None,
         typer.Option("--min-intensity", help="Minimum spot intensity."),
-    ] = 4000.0,
+    ] = 2500.0,
     max_intensity: Annotated[
         float | None,
         typer.Option("--max-intensity", help="Maximum spot intensity."),
