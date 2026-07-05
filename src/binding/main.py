@@ -1,51 +1,7 @@
 from __future__ import annotations
 
-import typer
-
-from binding.commands.analyze import analyze
-from binding.commands.analyze_membrane import analyze_membrane
-from binding.commands.binarize import binarize
-from binding.commands.filter_spots import filter_spots
-from binding.commands.label import label
-from binding.commands.label_membrane import label_membrane
-from binding.commands.plot_lnp import plot_lnp
-from binding.commands.segment import segment
-from binding.commands.spot_counts import spot_counts
-from binding.commands.spotiflow import spotiflow
-from binding.commands.plot import plot
-from binding.commands.show import show
-from binding.commands.show_labeled import show_labeled
-from binding.commands.show_result import show_result
-from binding.commands.show_timeseries import show_timeseries
-from binding.commands.timeseries import timeseries
-
-app = typer.Typer(
-    add_completion=False,
-    help="Inspect converted microscope TIFF folders and visualize stacks.",
-)
-
-
-@app.callback()
-def cli() -> None:
-    """Inspect converted microscope TIFF folders and visualize stacks."""
-
-
-app.command()(binarize)
-app.command()(analyze)
-app.command(name="analyze-membrane")(analyze_membrane)
-app.command()(show_labeled)
-app.command()(label)
-app.command(name="label-membrane")(label_membrane)
-app.command()(segment)
-app.command()(spotiflow)
-app.command(name="filter-spots")(filter_spots)
-app.command(name="spot-counts")(spot_counts)
-app.command(name="plot-lnp")(plot_lnp)
-app.command()(show)
-app.command(name="show-result")(show_result)
-app.command()(plot)
-app.command()(timeseries)
-app.command(name="show-timeseries")(show_timeseries)
+from binding import commands  # noqa: F401
+from binding.app import app
 
 
 def main() -> None:

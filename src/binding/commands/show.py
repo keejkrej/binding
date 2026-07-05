@@ -5,9 +5,11 @@ from typing import Annotated
 
 import typer
 
-from binding.core import load_stack, load_voxel_scale
+from binding.app import app
+from binding.services.show import run_show
 
 
+@app.command()
 def show(
     input_dir: Annotated[
         Path,
@@ -31,35 +33,19 @@ def show(
     ] = None,
 ) -> None:
     try:
-        stack = load_stack(input_dir, position, channel, time)
-        voxel_scale = load_voxel_scale(metadata) if metadata is not None else None
+        result = run_show(
+            input_dir,
+            position=position,
+            channel=channel,
+            time=time,
+            metadata=metadata,
+        )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
     typer.echo(
-        f"Loaded position={position}, channel={channel}, time={time}: "
-        f"shape={stack.shape}, dtype={stack.dtype}"
+        f"Loaded position={result.position}, channel={result.channel}, time={result.time}: "
+        f"shape={result.shape}, dtype={result.dtype}"
     )
-    if voxel_scale is not None:
-        typer.echo(f"Voxel scale (z, y, x): {voxel_scale} um")
-
-    import napari
-
-    viewer = napari.Viewer()
-    viewer.add_image(
-        stack,
-        name=f"Pos{position} C{channel} T{time}",
-        metadata={
-            "position": position,
-            "channel": channel,
-            "time": time,
-            "source": str(input_dir),
-            "axis_order": "ZYX",
-            "metadata": str(metadata) if metadata is not None else None,
-            "voxel_size_um_zyx": voxel_scale,
-        },
-        scale=voxel_scale,
-        units=("um", "um", "um") if voxel_scale is not None else None,
-    )
-    viewer.dims.ndisplay = 3
-    napari.run()
+    if result.voxel_scale is not None:
+        typer.echo(f"Voxel scale (z, y, x): {result.voxel_scale} um")

@@ -1,100 +1,15 @@
 from __future__ import annotations
 
-import shutil
-import subprocess
-import sys
-import tempfile
 from pathlib import Path
 from typing import Annotated
 
-import numpy as np
-import tifffile
 import typer
-from tqdm import tqdm
 
-from binding.core import (
-    available_times,
-    list_rois,
-    load_roi_stack,
-    load_stack,
-    spotiflow_roi_output_path,
-)
-from binding.spotiflow_utils import load_spotiflow_model, predict_spots, write_spot_csv
+from binding.app import app
+from binding.services.spotiflow import run_spotiflow_roi, run_spotiflow_stack
 
 
-def _spotiflow_command() -> list[str]:
-    command = shutil.which("spotiflow-predict")
-    if command is not None:
-        return [command]
-    return [sys.executable, "-m", "spotiflow.cli.predict"]
-
-
-def _predict_stack_with_cli(
-    stack: np.ndarray,
-    output_path: Path,
-    *,
-    model_name: str,
-    estimate_params: bool,
-) -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
-        stack_path = tmp_dir / output_path.with_suffix(".tif").name
-        tifffile.imwrite(stack_path, stack)
-
-        command = _spotiflow_command() + [
-            str(stack_path),
-            "--pretrained-model",
-            model_name,
-            "--out-dir",
-            str(tmp_dir),
-        ]
-        if estimate_params:
-            command.append("--estimate-params")
-            command.append("True")
-
-        completed = subprocess.run(command, check=False)
-        if completed.returncode != 0:
-            raise RuntimeError(
-                "spotiflow command failed; ensure spotiflow is installed and the command/options are valid"
-            )
-
-        generated_path = stack_path.with_suffix(".csv")
-        if not generated_path.exists():
-            raise RuntimeError(
-                f"spotiflow completed but did not produce expected CSV {generated_path}"
-            )
-
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(generated_path), output_path)
-
-
-def _resolve_roi_times(
-    input_dir: Path,
-    position: int,
-    channel: int,
-    roi: int | None,
-    all_rois: bool,
-    all_times: bool,
-    time: int,
-) -> tuple[list[int], list[int]]:
-    if all_rois:
-        rois = list_rois(input_dir, position)
-    elif roi is not None:
-        rois = [roi]
-    else:
-        raise typer.BadParameter("ROI mode requires --roi or --all-rois")
-
-    if all_times:
-        times = available_times(input_dir, position, channel)
-        if not times:
-            stack = load_roi_stack(input_dir, position, rois[0], channel)
-            times = list(range(stack.shape[0]))
-    else:
-        times = [time]
-
-    return rois, times
-
-
+@app.command()
 def spotiflow(
     input_dir: Annotated[
         Path,
@@ -161,75 +76,44 @@ def spotiflow(
 
     if roi_mode:
         try:
-            rois, times = _resolve_roi_times(
+            result = run_spotiflow_roi(
                 input_dir,
-                position,
-                channel,
-                roi,
-                all_rois,
-                all_times,
-                time,
+                position=position,
+                channel=channel,
+                time=time,
+                output=output,
+                model=model,
+                estimate_params=estimate_params,
+                device=device,
+                roi=roi,
+                all_rois=all_rois,
+                all_times=all_times,
             )
         except ValueError as exc:
             raise typer.BadParameter(str(exc)) from exc
 
-        model_obj = load_spotiflow_model(model)
-        total_spots = 0
-        for roi_index in rois:
-            stack = load_roi_stack(input_dir, position, roi_index, channel)
-            for time_index in tqdm(times, desc=f"ROI {roi_index:02d}", unit="frame"):
-                if time_index >= stack.shape[0]:
-                    raise typer.BadParameter(
-                        f"time={time_index} is out of range for ROI {roi_index} with {stack.shape[0]} frames"
-                    )
-                frame = np.asarray(stack[time_index])
-                spots = predict_spots(
-                    model_obj,
-                    frame,
-                    estimate_params=estimate_params,
-                    device=device,
-                )
-                output_path = spotiflow_roi_output_path(output, roi_index, time_index)
-                write_spot_csv(output_path, spots)
-                total_spots += len(spots)
-
         typer.echo(
-            f"Saved Spotiflow output to {output} for rois={rois}, times={len(times)}, "
-            f"total_spots={total_spots}, model={model}"
+            f"Saved Spotiflow output to {result.output_dir} for rois={result.rois}, times={result.time_count}, "
+            f"total_spots={result.total_spots}, model={result.model}"
         )
         return
 
-    output_path = output / (
-        f"spotiflow_position{position:03d}_channel{channel:03d}_time{time:09d}.csv"
-    )
-    resolved_model = "smfish_3d" if model == "general" else model
-
     try:
-        stack = load_stack(input_dir, position, channel, time)
+        result = run_spotiflow_stack(
+            input_dir,
+            position=position,
+            channel=channel,
+            time=time,
+            output=output,
+            model=model,
+            estimate_params=estimate_params,
+            device=device,
+        )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
     typer.echo(
-        f"Loaded position={position}, channel={channel}, time={time}: "
-        f"shape={stack.shape}, dtype={stack.dtype}, model={resolved_model}"
+        f"Loaded position={result.position}, channel={result.channel}, time={result.time}: "
+        f"shape={result.shape}, dtype={result.dtype}, model={result.model}"
     )
-
-    if stack.ndim == 2 or (stack.ndim == 3 and stack.shape[0] == 1):
-        image = stack[0] if stack.ndim == 3 else stack
-        model_obj = load_spotiflow_model(model)
-        spots = predict_spots(
-            model_obj,
-            np.asarray(image),
-            estimate_params=estimate_params,
-            device=device,
-        )
-        write_spot_csv(output_path, spots)
-    else:
-        _predict_stack_with_cli(
-            stack,
-            output_path,
-            model_name=resolved_model,
-            estimate_params=estimate_params,
-        )
-
-    typer.echo(f"Saved spotiflow output to {output_path}")
+    typer.echo(f"Saved spotiflow output to {result.output_path}")

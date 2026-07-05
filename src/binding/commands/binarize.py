@@ -3,35 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-import numpy as np
 import typer
 
-from binding.core import binary_output_path, load_stack, load_voxel_scale
+from binding.app import app
+from binding.services.binarize import run_binarize
 
 
-def choose_threshold_in_napari(
-    stack: np.ndarray,
-    name: str,
-    voxel_scale: tuple[float, float, float] | None,
-) -> float:
-    import napari
-
-    typer.echo(
-        "Adjust the image contrast minimum in napari, then close the napari window "
-        "to use that minimum as the binarization threshold."
-    )
-    viewer = napari.Viewer()
-    layer = viewer.add_image(
-        stack,
-        name=name,
-        scale=voxel_scale,
-        units=("um", "um", "um") if voxel_scale is not None else None,
-    )
-    viewer.dims.ndisplay = 3
-    napari.run()
-    return float(layer.contrast_limits[0])
-
-
+@app.command()
 def binarize(
     input_dir: Annotated[
         Path,
@@ -70,27 +48,27 @@ def binarize(
     ] = None,
 ) -> None:
     try:
-        stack = load_stack(input_dir, position, channel, time)
-        voxel_scale = load_voxel_scale(metadata) if metadata is not None else None
+        if threshold is None:
+            typer.echo(
+                "Adjust the image contrast minimum in napari, then close the napari window "
+                "to use that minimum as the binarization threshold."
+            )
+        result = run_binarize(
+            input_dir,
+            position=position,
+            channel=channel,
+            time=time,
+            output=output,
+            threshold=threshold,
+            metadata=metadata,
+        )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
-    if voxel_scale is not None:
-        typer.echo(f"Voxel scale (z, y, x): {voxel_scale} um")
-
-    layer_name = f"Pos{position} C{channel} T{time}"
-    resolved_threshold = (
-        choose_threshold_in_napari(stack, layer_name, voxel_scale)
-        if threshold is None
-        else threshold
-    )
-    binary_stack = stack > resolved_threshold
-
-    output.mkdir(parents=True, exist_ok=True)
-    output_path = binary_output_path(output, position, channel, time)
-    np.save(output_path, binary_stack)
+    if result.voxel_scale is not None:
+        typer.echo(f"Voxel scale (z, y, x): {result.voxel_scale} um")
 
     typer.echo(
-        f"Saved {output_path} with shape={binary_stack.shape}, "
-        f"dtype={binary_stack.dtype}, threshold={resolved_threshold}"
+        f"Saved {result.output_path} with shape={result.shape}, "
+        f"dtype={result.dtype}, threshold={result.threshold}"
     )

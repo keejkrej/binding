@@ -1,27 +1,31 @@
-"""Regenerate fig5 with an EARLY (sparse) time frame for panel A.
-
-This is a copy of plot_lnp.py with the auto_select_time function replaced so
-that it picks an early time index (small spot_count) instead of the dense
-~70%-of-max frame. It writes both PNG and SVG to the paper figs dir.
-"""
 from __future__ import annotations
 
 import csv
-import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from matplotlib import patches
 from skimage.measure import find_contours
 
-from binding.commands.filter_spots import read_spot_csv
-from binding.core import compute_cell_mask, load_roi_stack
+from binding.core.roi import load_roi_stack
+from binding.core.segmentation import compute_cell_mask
+from binding.services.filter_spots import read_spot_csv
 
 PANEL_LABEL_FONTSIZE = 20
 AXIS_LABEL_FONTSIZE = 16
 TICK_LABEL_FONTSIZE = 14
-MEDIAN_LABEL_FONTSIZE = 12
-LEGEND_FONTSIZE = 12
+MEDIAN_LABEL_FONTSIZE = 14
+
+
+@dataclass(frozen=True)
+class PlotLnpResult:
+    output_path: Path
+    selected_roi: int
+    selected_time: int
+    spot_count: int
+    cell_count: int
+    movie_warnings: tuple[str, ...] = ()
 
 
 def to_plot_time(values: list[float], unit: str) -> list[float]:
@@ -66,32 +70,95 @@ def auto_select_roi(grouped: dict[int, tuple[list[float], list[int]]]) -> int:
     )
 
 
-def auto_select_time_early(counts_by_roi: dict[int, tuple[list[float], list[int]]], roi: int) -> int:
-    """Pick an EARLY, SPARSE time frame.
-
-    The original auto_select_time picked ~70% of max spot_count (dense).
-    For the paper we want to show an early, sparse frame so the reader can
-    see individual LNP binding events. We pick the first time index where
-    spot_count reaches a small threshold (~10% of max) so there are clearly
-    visible but sparse spots. Falls back to the first nonzero count, or 0.
-    """
+def auto_select_time(counts_by_roi: dict[int, tuple[list[float], list[int]]], roi: int) -> int:
     _, counts = counts_by_roi[roi]
     if not counts:
         return 0
-    max_count = max(counts)
-    if max_count <= 0:
-        return 0
-    target = max(1, int(max_count * 0.10))  # ~10% of max, at least 1
-    for index, count in enumerate(counts):
-        if count >= target:
-            return index
-    return 0
+    target = max(counts) * 0.7
+    return next(
+        (index for index, count in enumerate(counts) if count >= target),
+        len(counts) - 1,
+    )
 
 
 def intensity_to_radius(intensity: float) -> float:
     """Map spot intensity to circle radius (linear: 2000 -> 2 px, 16000 -> 16 px)."""
     s = float(intensity)
     return float(np.clip(2.0 + 14.0 * (s - 2000.0) / 14000.0, 2.0, 16.0))
+
+
+def _load_spots_for_roi(filtered_dir: Path, roi: int, n_times: int) -> dict[int, list[dict[str, str]]]:
+    spots: dict[int, list[dict[str, str]]] = {}
+    for ti in range(n_times):
+        try:
+            p = resolve_spot_csv(filtered_dir, roi, ti)
+            _, rows = read_spot_csv(p)
+            spots[ti] = rows
+        except Exception:
+            spots[ti] = []
+    return spots
+
+
+def generate_b_movie(
+    input_dir: Path,
+    filtered_dir: Path,
+    position: int,
+    roi: int,
+    output_path: Path,
+    channel: int = 1,
+    fps: float = 12.0,
+) -> None:
+    """Create mp4 of figB (BF-derived contour + intensity-scaled spot circles) over time for one ROI."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt
+    from matplotlib.animation import FuncAnimation
+
+    fluo_stack = load_roi_stack(input_dir, position, roi, channel)
+    bf_stack = load_roi_stack(input_dir, position, roi, 0)
+    n_times = int(fluo_stack.shape[0])
+    spots_by_t = _load_spots_for_roi(filtered_dir, roi, n_times)
+    h, w = fluo_stack.shape[1:3] if fluo_stack.ndim == 3 else fluo_stack.shape[-2:]
+
+    dpi = 72
+    fig, ax = plt.subplots(figsize=(max(3.0, w / dpi), max(3.0, h / dpi)), dpi=dpi)
+    fig.patch.set_facecolor("black")
+    ax.set_facecolor("black")
+    ax.margins(0)
+
+    def _draw_frame(ti: int) -> None:
+        ax.clear()
+        fluo = np.asarray(fluo_stack[ti])
+        bf = np.asarray(bf_stack[ti], dtype=np.float64)
+        mask = compute_cell_mask(bf)
+        conts = find_contours(mask.astype(float), level=0.5)
+        bg = np.zeros((h, w), dtype=np.float32)
+        ax.imshow(bg, cmap="gray", vmin=0, vmax=1, interpolation="nearest")
+        ax.set_facecolor("black")
+        for cont in conts:
+            if len(cont) > 1:
+                ax.plot(cont[:, 1], cont[:, 0], color="#00f0ff", linewidth=1.6, alpha=0.95)
+        for row in spots_by_t.get(ti, []):
+            x = float(row["x"])
+            y = float(row["y"])
+            r = intensity_to_radius(float(row.get("intensity", 5000.0)))
+            ax.add_patch(patches.Circle((x, y), radius=r, fill=False, edgecolor="#ffeb3b", linewidth=1.2))
+        ax.set_xlim(-0.5, w - 0.5)
+        ax.set_ylim(h - 0.5, -0.5)
+        ax.set_aspect("equal")
+        ax.axis("off")
+        ax.text(0.01, 0.99, f"roi{roi:02d} t={ti}", transform=ax.transAxes, color="#cccccc", fontsize=7, va="top")
+
+    def update(ti: int):
+        _draw_frame(ti)
+        return []
+
+    _draw_frame(0)
+    ani = FuncAnimation(fig, update, frames=n_times, interval=1000.0 / fps, blit=False, repeat=False)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ani.save(str(output_path), writer="ffmpeg", fps=fps, dpi=dpi, extra_args=["-vcodec", "libx264", "-pix_fmt", "yuv420p", "-crf", "18"])
+    plt.close(fig)
 
 
 def resolve_spot_csv(filtered_dir: Path, roi: int, time_index: int) -> Path:
@@ -165,20 +232,22 @@ def render_detections(
         )
 
 
-def render_early(
+def run_plot_lnp(
     input_dir: Path,
     counts_csv: Path,
+    *,
     filtered_dir: Path,
-    output_png: Path,
-    output_svg: Path,
-    position: int = 0,
-    channel: int = 1,
-    time_unit: str = "min",
-) -> None:
+    output: Path,
+    position: int,
+    channel: int,
+    roi: int | None,
+    time: int | None,
+    time_unit: str,
+    movies: Path | None,
+) -> PlotLnpResult:
     rois, grouped = read_counts_csv(counts_csv)
-    selected_roi = auto_select_roi(grouped)
-    selected_time = auto_select_time_early(grouped, selected_roi)
-
+    selected_roi = roi if roi is not None else auto_select_roi(grouped)
+    selected_time = time if time is not None else auto_select_time(grouped, selected_roi)
     fluo_stack = load_roi_stack(input_dir, position, selected_roi, channel)
     bf_stack = load_roi_stack(input_dir, position, selected_roi, 0)
     image = fluo_stack[selected_time]
@@ -244,41 +313,33 @@ def render_early(
             va="top",
         )
 
-    x_label = "time (min)" if time_unit == "min" else "time (s)"
+    x_label = "t (min)" if time_unit == "min" else "t (s)"
     axis_f.set_xlabel(x_label, fontsize=AXIS_LABEL_FONTSIZE)
-    axis_f.set_ylabel("LNP count", fontsize=AXIS_LABEL_FONTSIZE)
+    axis_f.set_ylabel("n", fontsize=AXIS_LABEL_FONTSIZE)
     axis_f.set_facecolor("white")
     axis_f.spines["top"].set_visible(False)
     axis_f.spines["right"].set_visible(False)
     axis_f.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE, pad=6)
     add_panel_label(axis_f, "C")
 
-    output_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_png, dpi=200, facecolor="white")
-    fig.savefig(output_svg, format="svg", facecolor="white")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output, dpi=200, facecolor="white")
     plt.close(fig)
 
-    max_count = max(grouped[selected_roi][1]) if grouped[selected_roi][1] else 0
-    print(
-        f"Saved {output_png} and {output_svg} "
-        f"with roi={selected_roi}, time={selected_time}, "
-        f"spots={len(spot_rows)}, max_count={max_count}, cells={len(rois)}"
-    )
+    movie_warnings: list[str] = []
+    if movies is not None:
+        for r in rois:
+            out_mp4 = movies / f"roi{r:02d}_figB.mp4"
+            try:
+                generate_b_movie(input_dir, filtered_dir, position, r, out_mp4, channel=channel)
+            except Exception as exc:
+                movie_warnings.append(f"Warning: failed movie for roi {r}: {exc}")
 
-
-if __name__ == "__main__":
-    DATA_DIR = Path("/home/jack/data/lisca_review/fig5/20260324_1")
-    COUNTS_CSV = DATA_DIR / "results" / "spot_counts_position000_channel001.csv"
-    FILTERED_DIR = DATA_DIR / "results" / "filtered"
-    OUT_PNG = Path("/home/jack/workspace/lisca-paper/figs/fig5.png")
-    OUT_SVG = Path("/home/jack/workspace/lisca-paper/figs/fig5.svg")
-    render_early(
-        input_dir=DATA_DIR,
-        counts_csv=COUNTS_CSV,
-        filtered_dir=FILTERED_DIR,
-        output_png=OUT_PNG,
-        output_svg=OUT_SVG,
-        position=0,
-        channel=1,
-        time_unit="min",
+    return PlotLnpResult(
+        output_path=output,
+        selected_roi=selected_roi,
+        selected_time=selected_time,
+        spot_count=len(spot_rows),
+        cell_count=len(rois),
+        movie_warnings=tuple(movie_warnings),
     )
