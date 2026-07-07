@@ -1,17 +1,23 @@
-"""Regenerate fig5 with an EARLY (sparse) time frame for panel A.
+"""Regenerate fig5 as a three-row figure.
 
-This is a copy of plot_lnp.py with the auto_select_time function replaced so
-that it picks an early time index (small spot_count) instead of the dense
-~70%-of-max frame. It writes both PNG and SVG to the paper figs dir.
+Row A: three stages (early/middle/late) of the fluorescence image of the ROI
+(rhodamine-labeled lipid channel).
+Row B: the same three stages rendered as white background + BF-derived cell
+contour + intensity-scaled LNP circles.
+Row C: dual-axis time course, one line per cell (low opacity) plus the
+across-cell median (opaque) on each axis -- left axis: LNP count per cell
+(red); right axis: median LNP intensity per cell (blue).
+
+Writes both PNG and SVG to the paper figs dir.
 """
 from __future__ import annotations
 
 import csv
-import re
 from pathlib import Path
 
 import numpy as np
 from matplotlib import patches
+from matplotlib.lines import Line2D
 from skimage.measure import find_contours
 
 from binding.services.filter_spots import read_spot_csv
@@ -22,6 +28,18 @@ AXIS_LABEL_FONTSIZE = 16
 TICK_LABEL_FONTSIZE = 14
 MEDIAN_LABEL_FONTSIZE = 12
 LEGEND_FONTSIZE = 12
+
+# Panel B (white background) colors: chosen for contrast against white,
+# distinct from the black-background yellow/cyan scheme used elsewhere.
+CONTOUR_COLOR = "#0b2545"  # dark navy cell contour
+SPOT_COLOR = "#b3001c"  # dark red spot outline
+
+# Panel C: count (left axis) in red, LNP intensity (right axis) in blue; the
+# per-cell traces reuse the same hue at low opacity so the two axes stay
+# visually distinct while each keeps a single consistent color identity.
+COUNT_COLOR = "#d7263d"
+INTENSITY_COLOR = "#1f77b4"
+PER_CELL_ALPHA = 0.25
 
 
 def to_plot_time(values: list[float], unit: str) -> list[float]:
@@ -88,6 +106,18 @@ def auto_select_time_early(counts_by_roi: dict[int, tuple[list[float], list[int]
     return 0
 
 
+def select_frame_fraction_time(n_frames: int, fraction: float) -> int:
+    """Pick a time index at a given fraction of the ROI's total frame count.
+
+    Used for the "middle" and "late" time points so the three sub-panels are
+    spread across the full recording rather than clustered near where
+    spot_count first crosses a threshold.
+    """
+    if n_frames <= 1:
+        return 0
+    return int(round(fraction * (n_frames - 1)))
+
+
 def intensity_to_radius(intensity: float) -> float:
     """Map spot intensity to circle radius (linear: 2000 -> 2 px, 16000 -> 16 px)."""
     s = float(intensity)
@@ -95,15 +125,30 @@ def intensity_to_radius(intensity: float) -> float:
 
 
 def resolve_spot_csv(filtered_dir: Path, roi: int, time_index: int) -> Path:
-    path = filtered_dir / f"roi{roi:02d}_time{time_index:09d}_filtered.csv"
+    return filtered_dir / f"roi{roi:02d}_time{time_index:09d}_filtered.csv"
+
+
+def read_spot_intensities(filtered_dir: Path, roi: int, time_index: int) -> list[float]:
+    path = resolve_spot_csv(filtered_dir, roi, time_index)
     if not path.exists():
-        raise ValueError(f"Filtered spot CSV not found: {path}")
-    return path
+        return []
+    _, rows = read_spot_csv(path)
+    return [float(row["intensity"]) for row in rows if row.get("intensity") not in (None, "")]
 
 
-def add_panel_label(axis, label: str) -> None:
+def per_cell_median_intensity_series(filtered_dir: Path, roi: int, times: list[float]) -> np.ndarray:
+    """Per-time median LNP intensity for one cell; NaN where no spots were detected."""
+    series = np.full(len(times), np.nan, dtype=float)
+    for index in range(len(times)):
+        intensities = read_spot_intensities(filtered_dir, roi, index)
+        if intensities:
+            series[index] = float(np.median(intensities))
+    return series
+
+
+def add_panel_label(axis, label: str, *, x: float = -0.14) -> None:
     axis.text(
-        -0.14,
+        x,
         1.04,
         label,
         transform=axis.transAxes,
@@ -116,7 +161,7 @@ def add_panel_label(axis, label: str) -> None:
     )
 
 
-def render_fluorescence(axis, image: np.ndarray) -> None:
+def render_fluorescence(axis, image: np.ndarray, *, title: str | None = None) -> None:
     axis.imshow(
         image,
         cmap="inferno",
@@ -126,19 +171,32 @@ def render_fluorescence(axis, image: np.ndarray) -> None:
     )
     axis.set_facecolor("black")
     axis.axis("off")
+    if title:
+        axis.text(
+            0.5,
+            -0.06,
+            title,
+            transform=axis.transAxes,
+            ha="center",
+            va="top",
+            fontsize=TICK_LABEL_FONTSIZE,
+            color="black",
+        )
 
 
-def render_detections(
+def render_detections_white(
     axis,
-    image: np.ndarray,
+    image_shape: tuple[int, int],
     rows: list[dict[str, str]],
-    contour_coords: list[np.ndarray] | None = None,
+    contour_coords: list[np.ndarray] | None,
+    *,
+    title: str | None = None,
 ) -> None:
-    """Render fig B purely: black background + cell contour from BF + circles sized by spot intensity."""
-    h, w = image.shape
-    background = np.zeros((h, w), dtype=np.float32)
+    """Panel B sub-image: white background + cell contour + intensity-scaled spot circles."""
+    h, w = image_shape
+    background = np.ones((h, w), dtype=np.float32)
     axis.imshow(background, cmap="gray", vmin=0, vmax=1, interpolation="nearest")
-    axis.set_facecolor("black")
+    axis.set_facecolor("white")
     axis.set_xlim(-0.5, w - 0.5)
     axis.set_ylim(h - 0.5, -0.5)
     axis.set_aspect("equal")
@@ -147,7 +205,7 @@ def render_detections(
     if contour_coords:
         for cont in contour_coords:
             if len(cont) > 1:
-                axis.plot(cont[:, 1], cont[:, 0], color="#00f0ff", linewidth=1.8, alpha=0.95)
+                axis.plot(cont[:, 1], cont[:, 0], color=CONTOUR_COLOR, linewidth=1.8, alpha=0.95)
 
     for row in rows:
         x = float(row["x"])
@@ -159,9 +217,21 @@ def render_detections(
                 (x, y),
                 radius=radius,
                 fill=False,
-                edgecolor="#ffeb3b",
+                edgecolor=SPOT_COLOR,
                 linewidth=1.3,
             )
+        )
+
+    if title:
+        axis.text(
+            0.5,
+            -0.06,
+            title,
+            transform=axis.transAxes,
+            ha="center",
+            va="top",
+            fontsize=TICK_LABEL_FONTSIZE,
+            color="black",
         )
 
 
@@ -179,14 +249,17 @@ def render_early(
     selected_roi = auto_select_roi(grouped)
     selected_time = auto_select_time_early(grouped, selected_roi)
 
+    n_frames = len(grouped[selected_roi][1])
+    mid_time = select_frame_fraction_time(n_frames, 0.5)
+    late_time = select_frame_fraction_time(n_frames, 0.9)
+    stage_times = [
+        (selected_time, "early", "i"),
+        (mid_time, "middle", "ii"),
+        (late_time, "late", "iii"),
+    ]
+
     fluo_stack = load_roi_stack(input_dir, position, selected_roi, channel)
     bf_stack = load_roi_stack(input_dir, position, selected_roi, 0)
-    image = fluo_stack[selected_time]
-    bf_frame = np.asarray(bf_stack[selected_time], dtype=np.float64)
-    mask = compute_cell_mask(bf_frame)
-    contour_coords = find_contours(mask.astype(float), level=0.5)
-    spot_csv = resolve_spot_csv(filtered_dir, selected_roi, selected_time)
-    _, spot_rows = read_spot_csv(spot_csv)
 
     if time_unit not in {"sec", "min"}:
         raise ValueError("--time-unit must be 'sec' or 'min'")
@@ -196,62 +269,99 @@ def render_early(
     matplotlib.use("Agg")
     from matplotlib import pyplot as plt
 
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4), facecolor="white")
-    axis_d, axis_e, axis_f = axes
-    fig.subplots_adjust(left=0.08, right=0.99, bottom=0.14, top=0.88, wspace=0.28)
+    fig = plt.figure(figsize=(11.5, 12.5), facecolor="white")
+    gs = fig.add_gridspec(
+        3,
+        3,
+        height_ratios=[1.0, 1.0, 0.85],
+        hspace=0.4,
+        wspace=0.12,
+        left=0.09,
+        right=0.90,
+        bottom=0.06,
+        top=0.96,
+    )
+    axis_a_axes = [fig.add_subplot(gs[0, i]) for i in range(3)]
+    axis_b_axes = [fig.add_subplot(gs[1, i]) for i in range(3)]
+    axis_c = fig.add_subplot(gs[2, :])
 
-    render_fluorescence(axis_d, np.asarray(image))
-    add_panel_label(axis_d, "A")
-    render_detections(axis_e, np.asarray(image), spot_rows, contour_coords=list(contour_coords))
-    add_panel_label(axis_e, "B")
+    # ---- Row A: three stages of the raw fluorescence image (rhodamine-labeled LNP) ----
+    for axis, (time_index, title, sub_label) in zip(axis_a_axes, stage_times):
+        render_fluorescence(axis, np.asarray(fluo_stack[time_index]), title=title)
+    add_panel_label(axis_a_axes[0], "A")
+    for axis, (_, _, sub_label) in zip(axis_a_axes, stage_times):
+        add_panel_label(axis, sub_label, x=0.04)
 
-    median_times: list[float] | None = None
-    median_counts: list[float] | None = None
-    for roi_index in rois:
-        times, counts = grouped[roi_index]
-        plot_times = to_plot_time(times, time_unit)
-        axis_f.plot(
-            plot_times,
-            counts,
-            color="#b8b8b8",
-            linewidth=1.0,
-            alpha=0.8,
-        )
-        if median_times is None:
-            median_times = plot_times
-            median_counts = [float(value) for value in counts]
+    # ---- Row B: same three stages, white background + contour + spot circles ----
+    for axis, (time_index, title, sub_label) in zip(axis_b_axes, stage_times):
+        bf_frame = np.asarray(bf_stack[time_index], dtype=np.float64)
+        mask = compute_cell_mask(bf_frame)
+        contour_coords = list(find_contours(mask.astype(float), level=0.5))
+
+        spot_csv = resolve_spot_csv(filtered_dir, selected_roi, time_index)
+        if spot_csv.exists():
+            _, spot_rows = read_spot_csv(spot_csv)
         else:
-            for index, count in enumerate(counts):
-                median_counts[index] += float(count)
+            spot_rows = []  # no filtered CSV for this frame; draw contour only
 
-    if median_times is not None and median_counts is not None:
-        median_counts = [value / len(rois) for value in median_counts]
-        axis_f.plot(
-            median_times,
-            median_counts,
-            color="#d7263d",
-            linewidth=2.0,
-            label="median",
+        render_detections_white(
+            axis,
+            np.asarray(fluo_stack[time_index]).shape,
+            spot_rows,
+            contour_coords=contour_coords,
+            title=title,
         )
-        axis_f.text(
-            0.03,
-            0.97,
-            "median",
-            transform=axis_f.transAxes,
-            color="#d7263d",
-            fontsize=MEDIAN_LABEL_FONTSIZE,
-            ha="left",
-            va="top",
-        )
+    add_panel_label(axis_b_axes[0], "B")
+    for axis, (_, _, sub_label) in zip(axis_b_axes, stage_times):
+        add_panel_label(axis, sub_label, x=0.04)
+
+    # ---- Row C: dual-axis, one line per cell (low opacity) + across-cell median (opaque) ----
+    reference_times = grouped[rois[0]][0]
+    plot_times = to_plot_time(reference_times, time_unit)
+    n_times = len(reference_times)
+
+    count_matrix = np.array([grouped[roi_index][1] for roi_index in rois], dtype=float)
+    for row in count_matrix:
+        axis_c.plot(plot_times, row, color=COUNT_COLOR, linewidth=1.0, alpha=PER_CELL_ALPHA)
+    median_counts = np.median(count_matrix, axis=0)
+    axis_c.plot(plot_times, median_counts, color=COUNT_COLOR, linewidth=2.0)
 
     x_label = "time (min)" if time_unit == "min" else "time (s)"
-    axis_f.set_xlabel(x_label, fontsize=AXIS_LABEL_FONTSIZE)
-    axis_f.set_ylabel("LNP count", fontsize=AXIS_LABEL_FONTSIZE)
-    axis_f.set_facecolor("white")
-    axis_f.spines["top"].set_visible(False)
-    axis_f.spines["right"].set_visible(False)
-    axis_f.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE, pad=6)
-    add_panel_label(axis_f, "C")
+    axis_c.set_xlabel(x_label, fontsize=AXIS_LABEL_FONTSIZE)
+    axis_c.set_ylabel("LNP count per cell", fontsize=AXIS_LABEL_FONTSIZE, color=COUNT_COLOR)
+    axis_c.set_facecolor("white")
+    axis_c.spines["top"].set_visible(False)
+    axis_c.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE, pad=6)
+    axis_c.tick_params(axis="y", labelcolor=COUNT_COLOR)
+    add_panel_label(axis_c, "C")
+
+    intensity_matrix = np.array(
+        [per_cell_median_intensity_series(filtered_dir, roi_index, reference_times) for roi_index in rois]
+    )
+    axis_c2 = axis_c.twinx()
+    for row in intensity_matrix:
+        axis_c2.plot(plot_times, row, color=INTENSITY_COLOR, linewidth=1.0, alpha=PER_CELL_ALPHA)
+    median_intensity = np.nanmedian(intensity_matrix, axis=0)
+    axis_c2.plot(plot_times, median_intensity, color=INTENSITY_COLOR, linewidth=2.0)
+    axis_c2.set_ylabel(
+        "median LNP intensity per cell (a.u.)", fontsize=AXIS_LABEL_FONTSIZE, color=INTENSITY_COLOR
+    )
+    axis_c2.tick_params(axis="y", labelsize=TICK_LABEL_FONTSIZE, labelcolor=INTENSITY_COLOR)
+    axis_c2.spines["top"].set_visible(False)
+
+    legend_handles = [
+        Line2D([0], [0], color=COUNT_COLOR, linewidth=2.0, label="LNP count (median)"),
+        Line2D([0], [0], color=INTENSITY_COLOR, linewidth=2.0, label="LNP intensity (median)"),
+    ]
+    axis_c.legend(
+        handles=legend_handles,
+        fontsize=LEGEND_FONTSIZE,
+        loc="upper left",
+        frameon=True,
+        fancybox=False,
+        edgecolor="0.8",
+        framealpha=0.9,
+    )
 
     output_png.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_png, dpi=200, facecolor="white")
@@ -261,8 +371,8 @@ def render_early(
     max_count = max(grouped[selected_roi][1]) if grouped[selected_roi][1] else 0
     print(
         f"Saved {output_png} and {output_svg} "
-        f"with roi={selected_roi}, time={selected_time}, "
-        f"spots={len(spot_rows)}, max_count={max_count}, cells={len(rois)}"
+        f"with roi={selected_roi}, times(early/mid/late)={selected_time}/{mid_time}/{late_time}, "
+        f"max_count={max_count}, cells={len(rois)}"
     )
 
 
