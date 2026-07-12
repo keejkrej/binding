@@ -477,14 +477,13 @@ def render_early(
         framealpha=0.9,
     )
 
-    output_png.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_png, dpi=200, facecolor="white")
+    output_svg.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_svg, format="svg", facecolor="white")
     plt.close(fig)
 
     max_count = max(grouped[selected_roi][1]) if grouped[selected_roi][1] else 0
     print(
-        f"Saved {output_png} and {output_svg} "
+        f"Saved {output_svg} "
         f"with roi={selected_roi}, times(early/mid/late)={selected_time}/{mid_time}/{late_time}, "
         f"max_count={max_count}, cells={len(rois)}"
     )
@@ -494,13 +493,12 @@ if __name__ == "__main__":
     DATA_DIR = Path("/home/jack/data/lisca_review/fig5/20260324_1")
     COUNTS_CSV = DATA_DIR / "results" / "spot_counts_position000_channel001.csv"
     FILTERED_DIR = DATA_DIR / "results" / "filtered"
-    OUT_PNG = Path("/home/jack/workspace/lisca-paper/figs/fig5.png")
     OUT_SVG = Path("/home/jack/workspace/lisca-paper/figs/fig5.svg")
     render_early(
         input_dir=DATA_DIR,
         counts_csv=COUNTS_CSV,
         filtered_dir=FILTERED_DIR,
-        output_png=OUT_PNG,
+        output_png=OUT_SVG,
         output_svg=OUT_SVG,
         position=0,
         channel=1,
