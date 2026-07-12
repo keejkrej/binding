@@ -167,6 +167,23 @@ def add_panel_label(axis, label: str, *, x: float = -0.14) -> None:
     )
 
 
+def add_bottom_panel_label(axis, label: str) -> None:
+    """Panel letter for the full-width bottom row, above phase annotations."""
+    axis.annotate(
+        label,
+        xy=(0.0, 1.0),
+        xycoords=axis.transAxes,
+        xytext=(-32, 40),
+        textcoords="offset points",
+        ha="left",
+        va="bottom",
+        fontsize=PANEL_LABEL_FONTSIZE,
+        fontweight="bold",
+        color="black",
+        clip_on=False,
+    )
+
+
 def add_panel_border(axis, *, color: str = "black", linewidth: float = 0.8) -> None:
     x0, x1 = axis.get_xlim()
     y0, y1 = axis.get_ylim()
@@ -299,7 +316,7 @@ def render_placeholder(
 
 
 def add_phase_markers(axis, x_max: float) -> None:
-    """Mark LNP adsorption phases with vertical lines and region labels."""
+    """Mark LNP adsorption phases with vertical lines and region labels above the panel."""
     import matplotlib.transforms as transforms
 
     panel_x = transforms.blended_transform_factory(axis.transData, axis.transAxes)
@@ -314,25 +331,27 @@ def add_phase_markers(axis, x_max: float) -> None:
     bounds = [0.0, *PHASE_BOUNDARIES_MIN, x_max]
     for index, (roman, name) in enumerate(zip(PHASE_LABELS, PHASE_NAMES)):
         x_center = 0.5 * (bounds[index] + bounds[index + 1])
-        axis.text(
-            x_center,
-            0.97,
+        axis.annotate(
             roman,
-            transform=panel_x,
+            xy=(x_center, 1.0),
+            xycoords=panel_x,
+            xytext=(0, 16),
+            textcoords="offset points",
             ha="center",
-            va="top",
+            va="bottom",
             fontsize=TICK_LABEL_FONTSIZE,
             fontweight="bold",
             color=PHASE_LINE_COLOR,
             clip_on=False,
         )
-        axis.text(
-            x_center,
-            0.90,
+        axis.annotate(
             name,
-            transform=panel_x,
+            xy=(x_center, 1.0),
+            xycoords=panel_x,
+            xytext=(0, 2),
+            textcoords="offset points",
             ha="center",
-            va="top",
+            va="bottom",
             fontsize=TICK_LABEL_FONTSIZE - 1,
             color=PHASE_LINE_COLOR,
             clip_on=False,
@@ -446,7 +465,6 @@ def render_early(
     show_all_spines(axis_d)
     axis_d.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE, pad=6)
     axis_d.tick_params(axis="y", labelcolor=COUNT_COLOR)
-    add_panel_label(axis_d, "D")
     add_phase_markers(axis_d, float(plot_times[-1]) if plot_times else PHASE_BOUNDARIES_MIN[-1] + 10.0)
 
     intensity_matrix = np.array(
@@ -476,6 +494,7 @@ def render_early(
         edgecolor="0.8",
         framealpha=0.9,
     )
+    add_bottom_panel_label(axis_d, "D")
 
     output_svg.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_svg, format="svg", facecolor="white")
