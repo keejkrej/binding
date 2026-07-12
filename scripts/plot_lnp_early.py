@@ -1,12 +1,14 @@
-"""Regenerate fig5 as a three-row figure.
+"""Regenerate fig5 as a four-row figure.
 
 Row A: three stages (early/middle/late) of the fluorescence image of the ROI
 (rhodamine-labeled lipid channel).
 Row B: the same three stages rendered as white background + BF-derived cell
 contour + intensity-scaled LNP circles.
-Row C: dual-axis time course, one line per cell (low opacity) plus the
+Row C: blank white placeholders (i, ii, iii) reserved for future panels.
+Row D: dual-axis time course, one line per cell (low opacity) plus the
 across-cell median (opaque) on each axis -- left axis: LNP count per cell
-(red); right axis: median LNP intensity per cell (blue).
+(red); right axis: median LNP intensity per cell (blue), with vertical phase
+boundaries at 30 and 80 min (adsorption, clustering, saturation).
 
 Writes both PNG and SVG to the paper figs dir.
 """
@@ -40,6 +42,10 @@ SPOT_COLOR = "#b3001c"  # dark red spot outline
 COUNT_COLOR = "#d7263d"
 INTENSITY_COLOR = "#1f77b4"
 PER_CELL_ALPHA = 0.25
+PHASE_BOUNDARIES_MIN = (30.0, 80.0)
+PHASE_LABELS = ("I", "II", "III")
+PHASE_NAMES = ("adsorption", "clustering", "saturation")
+PHASE_LINE_COLOR = "#555555"
 
 
 def to_plot_time(values: list[float], unit: str) -> list[float]:
@@ -161,6 +167,32 @@ def add_panel_label(axis, label: str, *, x: float = -0.14) -> None:
     )
 
 
+def add_panel_border(axis, *, color: str = "black", linewidth: float = 0.8) -> None:
+    x0, x1 = axis.get_xlim()
+    y0, y1 = axis.get_ylim()
+    xmin, xmax = min(x0, x1), max(x0, x1)
+    ymin, ymax = min(y0, y1), max(y0, y1)
+    axis.add_patch(
+        patches.Rectangle(
+            (xmin, ymin),
+            xmax - xmin,
+            ymax - ymin,
+            fill=False,
+            edgecolor=color,
+            linewidth=linewidth,
+            clip_on=True,
+            zorder=10,
+        )
+    )
+
+
+def show_all_spines(axis, *, color: str = "black", linewidth: float = 0.8) -> None:
+    for side in ("top", "right", "bottom", "left"):
+        axis.spines[side].set_visible(True)
+        axis.spines[side].set_color(color)
+        axis.spines[side].set_linewidth(linewidth)
+
+
 def render_fluorescence(axis, image: np.ndarray, *, title: str | None = None) -> None:
     axis.imshow(
         image,
@@ -171,6 +203,7 @@ def render_fluorescence(axis, image: np.ndarray, *, title: str | None = None) ->
     )
     axis.set_facecolor("black")
     axis.axis("off")
+    add_panel_border(axis)
     if title:
         axis.text(
             0.5,
@@ -201,6 +234,7 @@ def render_detections_white(
     axis.set_ylim(h - 0.5, -0.5)
     axis.set_aspect("equal")
     axis.axis("off")
+    add_panel_border(axis)
 
     if contour_coords:
         for cont in contour_coords:
@@ -232,6 +266,76 @@ def render_detections_white(
             va="top",
             fontsize=TICK_LABEL_FONTSIZE,
             color="black",
+        )
+
+
+def render_placeholder(
+    axis,
+    image_shape: tuple[int, int],
+    *,
+    title: str | None = None,
+) -> None:
+    """Blank white panel matching the image-panel footprint of rows A and B."""
+    h, w = image_shape
+    background = np.ones((h, w), dtype=np.float32)
+    axis.imshow(background, cmap="gray", vmin=0, vmax=1, interpolation="nearest")
+    axis.set_facecolor("white")
+    axis.set_xlim(-0.5, w - 0.5)
+    axis.set_ylim(h - 0.5, -0.5)
+    axis.set_aspect("equal")
+    axis.axis("off")
+    add_panel_border(axis)
+    if title:
+        axis.text(
+            0.5,
+            -0.06,
+            title,
+            transform=axis.transAxes,
+            ha="center",
+            va="top",
+            fontsize=TICK_LABEL_FONTSIZE,
+            color="black",
+        )
+
+
+def add_phase_markers(axis, x_max: float) -> None:
+    """Mark LNP adsorption phases with vertical lines and region labels."""
+    import matplotlib.transforms as transforms
+
+    panel_x = transforms.blended_transform_factory(axis.transData, axis.transAxes)
+    for boundary in PHASE_BOUNDARIES_MIN:
+        axis.axvline(
+            boundary,
+            color=PHASE_LINE_COLOR,
+            linewidth=1.2,
+            linestyle="--",
+            zorder=1,
+        )
+    bounds = [0.0, *PHASE_BOUNDARIES_MIN, x_max]
+    for index, (roman, name) in enumerate(zip(PHASE_LABELS, PHASE_NAMES)):
+        x_center = 0.5 * (bounds[index] + bounds[index + 1])
+        axis.text(
+            x_center,
+            0.97,
+            roman,
+            transform=panel_x,
+            ha="center",
+            va="top",
+            fontsize=TICK_LABEL_FONTSIZE,
+            fontweight="bold",
+            color=PHASE_LINE_COLOR,
+            clip_on=False,
+        )
+        axis.text(
+            x_center,
+            0.90,
+            name,
+            transform=panel_x,
+            ha="center",
+            va="top",
+            fontsize=TICK_LABEL_FONTSIZE - 1,
+            color=PHASE_LINE_COLOR,
+            clip_on=False,
         )
 
 
@@ -269,11 +373,11 @@ def render_early(
     matplotlib.use("Agg")
     from matplotlib import pyplot as plt
 
-    fig = plt.figure(figsize=(11.5, 12.5), facecolor="white")
+    fig = plt.figure(figsize=(11.5, 15.5), facecolor="white")
     gs = fig.add_gridspec(
+        4,
         3,
-        3,
-        height_ratios=[1.0, 1.0, 0.85],
+        height_ratios=[1.0, 1.0, 1.0, 0.85],
         hspace=0.4,
         wspace=0.12,
         left=0.09,
@@ -283,7 +387,8 @@ def render_early(
     )
     axis_a_axes = [fig.add_subplot(gs[0, i]) for i in range(3)]
     axis_b_axes = [fig.add_subplot(gs[1, i]) for i in range(3)]
-    axis_c = fig.add_subplot(gs[2, :])
+    axis_c_axes = [fig.add_subplot(gs[2, i]) for i in range(3)]
+    axis_d = fig.add_subplot(gs[3, :])
 
     # ---- Row A: three stages of the raw fluorescence image (rhodamine-labeled LNP) ----
     for axis, (time_index, title, sub_label) in zip(axis_a_axes, stage_times):
@@ -315,45 +420,54 @@ def render_early(
     for axis, (_, _, sub_label) in zip(axis_b_axes, stage_times):
         add_panel_label(axis, sub_label, x=0.04)
 
-    # ---- Row C: dual-axis, one line per cell (low opacity) + across-cell median (opaque) ----
+    # ---- Row C: blank placeholders (same footprint as rows A/B) ----
+    image_shape = np.asarray(fluo_stack[0]).shape
+    for axis, (_, title, sub_label) in zip(axis_c_axes, stage_times):
+        render_placeholder(axis, image_shape, title=title)
+    add_panel_label(axis_c_axes[0], "C")
+    for axis, (_, _, sub_label) in zip(axis_c_axes, stage_times):
+        add_panel_label(axis, sub_label, x=0.04)
+
+    # ---- Row D: dual-axis, one line per cell (low opacity) + across-cell median (opaque) ----
     reference_times = grouped[rois[0]][0]
     plot_times = to_plot_time(reference_times, time_unit)
     n_times = len(reference_times)
 
     count_matrix = np.array([grouped[roi_index][1] for roi_index in rois], dtype=float)
     for row in count_matrix:
-        axis_c.plot(plot_times, row, color=COUNT_COLOR, linewidth=1.0, alpha=PER_CELL_ALPHA)
+        axis_d.plot(plot_times, row, color=COUNT_COLOR, linewidth=1.0, alpha=PER_CELL_ALPHA)
     median_counts = np.median(count_matrix, axis=0)
-    axis_c.plot(plot_times, median_counts, color=COUNT_COLOR, linewidth=2.0)
+    axis_d.plot(plot_times, median_counts, color=COUNT_COLOR, linewidth=2.0)
 
     x_label = "time (min)" if time_unit == "min" else "time (s)"
-    axis_c.set_xlabel(x_label, fontsize=AXIS_LABEL_FONTSIZE)
-    axis_c.set_ylabel("LNP count per cell", fontsize=AXIS_LABEL_FONTSIZE, color=COUNT_COLOR)
-    axis_c.set_facecolor("white")
-    axis_c.spines["top"].set_visible(False)
-    axis_c.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE, pad=6)
-    axis_c.tick_params(axis="y", labelcolor=COUNT_COLOR)
-    add_panel_label(axis_c, "C")
+    axis_d.set_xlabel(x_label, fontsize=AXIS_LABEL_FONTSIZE)
+    axis_d.set_ylabel("LNP count per cell", fontsize=AXIS_LABEL_FONTSIZE, color=COUNT_COLOR)
+    axis_d.set_facecolor("white")
+    show_all_spines(axis_d)
+    axis_d.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE, pad=6)
+    axis_d.tick_params(axis="y", labelcolor=COUNT_COLOR)
+    add_panel_label(axis_d, "D")
+    add_phase_markers(axis_d, float(plot_times[-1]) if plot_times else PHASE_BOUNDARIES_MIN[-1] + 10.0)
 
     intensity_matrix = np.array(
         [per_cell_median_intensity_series(filtered_dir, roi_index, reference_times) for roi_index in rois]
     )
-    axis_c2 = axis_c.twinx()
+    axis_d2 = axis_d.twinx()
+    show_all_spines(axis_d2)
     for row in intensity_matrix:
-        axis_c2.plot(plot_times, row, color=INTENSITY_COLOR, linewidth=1.0, alpha=PER_CELL_ALPHA)
+        axis_d2.plot(plot_times, row, color=INTENSITY_COLOR, linewidth=1.0, alpha=PER_CELL_ALPHA)
     median_intensity = np.nanmedian(intensity_matrix, axis=0)
-    axis_c2.plot(plot_times, median_intensity, color=INTENSITY_COLOR, linewidth=2.0)
-    axis_c2.set_ylabel(
+    axis_d2.plot(plot_times, median_intensity, color=INTENSITY_COLOR, linewidth=2.0)
+    axis_d2.set_ylabel(
         "median LNP intensity per cell (a.u.)", fontsize=AXIS_LABEL_FONTSIZE, color=INTENSITY_COLOR
     )
-    axis_c2.tick_params(axis="y", labelsize=TICK_LABEL_FONTSIZE, labelcolor=INTENSITY_COLOR)
-    axis_c2.spines["top"].set_visible(False)
+    axis_d2.tick_params(axis="y", labelsize=TICK_LABEL_FONTSIZE, labelcolor=INTENSITY_COLOR)
 
     legend_handles = [
         Line2D([0], [0], color=COUNT_COLOR, linewidth=2.0, label="LNP count (median)"),
         Line2D([0], [0], color=INTENSITY_COLOR, linewidth=2.0, label="LNP intensity (median)"),
     ]
-    axis_c.legend(
+    axis_d.legend(
         handles=legend_handles,
         fontsize=LEGEND_FONTSIZE,
         loc="upper left",

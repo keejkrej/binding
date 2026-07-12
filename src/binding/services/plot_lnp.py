@@ -183,6 +183,32 @@ def add_panel_label(axis, label: str) -> None:
     )
 
 
+def add_panel_border(axis, *, color: str = "black", linewidth: float = 0.8) -> None:
+    x0, x1 = axis.get_xlim()
+    y0, y1 = axis.get_ylim()
+    xmin, xmax = min(x0, x1), max(x0, x1)
+    ymin, ymax = min(y0, y1), max(y0, y1)
+    axis.add_patch(
+        patches.Rectangle(
+            (xmin, ymin),
+            xmax - xmin,
+            ymax - ymin,
+            fill=False,
+            edgecolor=color,
+            linewidth=linewidth,
+            clip_on=True,
+            zorder=10,
+        )
+    )
+
+
+def show_all_spines(axis, *, color: str = "black", linewidth: float = 0.8) -> None:
+    for side in ("top", "right", "bottom", "left"):
+        axis.spines[side].set_visible(True)
+        axis.spines[side].set_color(color)
+        axis.spines[side].set_linewidth(linewidth)
+
+
 def render_fluorescence(axis, image: np.ndarray) -> None:
     axis.imshow(
         image,
@@ -193,6 +219,7 @@ def render_fluorescence(axis, image: np.ndarray) -> None:
     )
     axis.set_facecolor("black")
     axis.axis("off")
+    add_panel_border(axis)
 
 
 def render_detections(
@@ -210,6 +237,7 @@ def render_detections(
     axis.set_ylim(h - 0.5, -0.5)
     axis.set_aspect("equal")
     axis.axis("off")
+    add_panel_border(axis)
 
     if contour_coords:
         for cont in contour_coords:
@@ -317,8 +345,7 @@ def run_plot_lnp(
     axis_f.set_xlabel(x_label, fontsize=AXIS_LABEL_FONTSIZE)
     axis_f.set_ylabel("n", fontsize=AXIS_LABEL_FONTSIZE)
     axis_f.set_facecolor("white")
-    axis_f.spines["top"].set_visible(False)
-    axis_f.spines["right"].set_visible(False)
+    show_all_spines(axis_f)
     axis_f.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE, pad=6)
     add_panel_label(axis_f, "C")
 
