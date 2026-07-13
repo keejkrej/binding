@@ -6,10 +6,9 @@ from pathlib import Path
 
 import numpy as np
 from matplotlib import patches
-from skimage.measure import find_contours
 
 from binding.core.roi import load_roi_stack
-from binding.core.segmentation import compute_cell_mask
+from binding.core.cellpose_contours import cellpose_contours_from_bf
 from binding.services.filter_spots import read_spot_csv
 
 PANEL_LABEL_FONTSIZE = 20
@@ -131,8 +130,7 @@ def generate_b_movie(
         ax.clear()
         fluo = np.asarray(fluo_stack[ti])
         bf = np.asarray(bf_stack[ti], dtype=np.float64)
-        mask = compute_cell_mask(bf)
-        conts = find_contours(mask.astype(float), level=0.5)
+        conts = cellpose_contours_from_bf(bf)
         bg = np.zeros((h, w), dtype=np.float32)
         ax.imshow(bg, cmap="gray", vmin=0, vmax=1, interpolation="nearest")
         ax.set_facecolor("black")
@@ -280,8 +278,7 @@ def run_plot_lnp(
     bf_stack = load_roi_stack(input_dir, position, selected_roi, 0)
     image = fluo_stack[selected_time]
     bf_frame = np.asarray(bf_stack[selected_time], dtype=np.float64)
-    mask = compute_cell_mask(bf_frame)
-    contour_coords = find_contours(mask.astype(float), level=0.5)
+    contour_coords = cellpose_contours_from_bf(bf_frame)
     spot_csv = resolve_spot_csv(filtered_dir, selected_roi, selected_time)
     _, spot_rows = read_spot_csv(spot_csv)
 

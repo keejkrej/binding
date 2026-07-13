@@ -20,10 +20,9 @@ from pathlib import Path
 import numpy as np
 from matplotlib import patches
 from matplotlib.lines import Line2D
-from skimage.measure import find_contours
 
 from binding.services.filter_spots import read_spot_csv
-from binding.core import compute_cell_mask, load_roi_stack
+from binding.core import cellpose_contours_from_bf, load_roi_stack
 
 PANEL_LABEL_FONTSIZE = 20
 AXIS_LABEL_FONTSIZE = 16
@@ -419,8 +418,7 @@ def render_early(
     # ---- Row B: same three stages, white background + contour + spot circles ----
     for axis, (time_index, title, sub_label) in zip(axis_b_axes, stage_times):
         bf_frame = np.asarray(bf_stack[time_index], dtype=np.float64)
-        mask = compute_cell_mask(bf_frame)
-        contour_coords = list(find_contours(mask.astype(float), level=0.5))
+        contour_coords = cellpose_contours_from_bf(bf_frame)
 
         spot_csv = resolve_spot_csv(filtered_dir, selected_roi, time_index)
         if spot_csv.exists():

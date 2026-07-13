@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "cellpose>=4.1.0",
     "matplotlib>=3.10",
     "napari>=0.7.0",
     "numpy>=1.26",
