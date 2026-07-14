@@ -2,7 +2,7 @@
 
 Row A: three stages (early/middle/late) of the fluorescence image of the ROI.
 Row B: spotiflow detections + Cellpose contours on white.
-Row C: kinetic phase cartoons from excalidraw-cli (fig5_c_phases.png), or matplotlib fallback.
+Row C: kinetic phase cartoons from excalidraw-cli (fig5_c_{i,ii,iii}.png), or matplotlib fallback.
 Row D: quantitative kinetic validation from theory and 4 s tracking.
 Row E: dual-axis time course with phase boundaries and model overlays.
 
@@ -604,7 +604,7 @@ def render_early(
     stage_counts_csv: Path | None = None,
     intensity_filtered_dir: Path | None = None,
     merge_events_csv: Path | None = None,
-    cartoon_png: Path | None = None,
+    cartoon_dir: Path | None = None,
     position: int = 0,
     channel: int = 1,
     time_unit: str = "min",
@@ -653,12 +653,10 @@ def render_early(
     axis_b_axes = [fig.add_subplot(gs[1, i]) for i in range(3)]
     axis_d_axes = [fig.add_subplot(gs[3, i]) for i in range(3)]
     axis_e = fig.add_subplot(gs[4, :])
-    cartoon_path = cartoon_png or Path("/home/jack/workspace/lisca-paper/figs/fig5_c_phases.png")
-    use_excalidraw_cartoon = cartoon_path.exists()
-    if use_excalidraw_cartoon:
-        axis_c = fig.add_subplot(gs[2, :])
-    else:
-        axis_c_axes = [fig.add_subplot(gs[2, i]) for i in range(3)]
+    cartoon_root = cartoon_dir or Path("/home/jack/workspace/lisca-paper/figs")
+    cartoon_paths = [cartoon_root / f"fig5_c_{slug}.png" for slug in ("i", "ii", "iii")]
+    use_excalidraw_cartoon = all(path.exists() for path in cartoon_paths)
+    axis_c_axes = [fig.add_subplot(gs[2, i]) for i in range(3)]
 
     # ---- Row A: three stages of the raw fluorescence image (rhodamine-labeled LNP) ----
     for axis, (time_index, title, sub_label) in zip(axis_a_axes, stage_times):
@@ -691,10 +689,10 @@ def render_early(
 
     # ---- Row C: kinetic phase cartoons (excalidraw-cli or matplotlib fallback) ----
     if use_excalidraw_cartoon:
-        axis_c.imshow(plt.imread(cartoon_path))
-        axis_c.set_aspect("auto")
-        axis_c.axis("off")
-        add_panel_label(axis_c, "C")
+        for axis, path in zip(axis_c_axes, cartoon_paths):
+            axis.imshow(plt.imread(path))
+            axis.set_aspect("equal")
+            axis.axis("off")
     else:
         cartoon_stages = [
             ("I", "early"),
@@ -703,9 +701,9 @@ def render_early(
         ]
         for axis, (phase, title) in zip(axis_c_axes, cartoon_stages):
             render_phase_cartoon(axis, phase, title=title)
-        add_panel_label(axis_c_axes[0], "C")
-        for axis, sub_label in zip(axis_c_axes, ("i", "ii", "iii")):
-            add_panel_label(axis, sub_label, x=0.04)
+    add_panel_label(axis_c_axes[0], "C")
+    for axis, sub_label in zip(axis_c_axes, ("i", "ii", "iii")):
+        add_panel_label(axis, sub_label, x=0.04)
 
     # ---- Row D: kinetic analysis (theory + 4 s tracking) ----
     reference_times = grouped[rois[0]][0]
