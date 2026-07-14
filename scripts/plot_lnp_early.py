@@ -4,11 +4,14 @@ Row A: three stages (early/middle/late) of the fluorescence image of the ROI
 (rhodamine-labeled lipid channel).
 Row B: the same three stages rendered as white background + BF-derived cell
 contour + intensity-scaled LNP circles.
-Row C: blank white placeholders (i, ii, iii) reserved for future panels.
+Row C: kinetic analysis from theory and 4 s tracking -- (i) phase I sqrt(t)
+scaling, (ii) phase II count slowdown vs. intensity rise, (iii) strict
+coalescence events by phase from particle tracking.
 Row D: dual-axis time course, one line per cell (low opacity) plus the
 across-cell median (opaque) on each axis -- left axis: LNP count per cell
 (red); right axis: median LNP intensity per cell (blue), with vertical phase
-boundaries at 30 and 80 min (adsorption, clustering, saturation).
+boundaries at 30 and 80 min (adsorption, clustering, saturation). Dashed red
+curve: sqrt(t) fit in phase I; dotted line: saturation level.
 
 Writes both PNG and SVG to the paper figs dir.
 """
@@ -45,6 +48,9 @@ PHASE_BOUNDARIES_MIN = (30.0, 80.0)
 PHASE_LABELS = ("I", "II", "III")
 PHASE_NAMES = ("adsorption", "clustering", "saturation")
 PHASE_LINE_COLOR = "#555555"
+FIT_LINE_COLOR = "#8b0000"
+MERGE_BAR_COLOR = "#6a0572"
+CLUSTER_COLOR = "#2ca02c"
 
 
 def to_plot_time(values: list[float], unit: str) -> list[float]:
@@ -285,6 +291,136 @@ def render_detections_white(
         )
 
 
+def fit_sqrt_phase_i(
+    times_min: list[float], median_counts: np.ndarray
+) -> tuple[float, float, float]:
+    """Linear fit N = a*sqrt(t) + b for 0 < t <= phase I boundary."""
+    t = np.asarray(times_min, dtype=float)
+    y = np.asarray(median_counts, dtype=float)
+    mask = (t > 0) & (t <= PHASE_BOUNDARIES_MIN[0])
+    if mask.sum() < 3:
+        return 0.0, 0.0, 0.0
+    sqrt_t = np.sqrt(t[mask])
+    coeffs = np.polyfit(sqrt_t, y[mask], 1)
+    predicted = coeffs[0] * sqrt_t + coeffs[1]
+    ss_res = float(np.sum((y[mask] - predicted) ** 2))
+    ss_tot = float(np.sum((y[mask] - y[mask].mean()) ** 2))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+    return float(coeffs[0]), float(coeffs[1]), r2
+
+
+def read_merge_events_by_phase(path: Path) -> dict[str, int]:
+    counts = {label: 0 for label in PHASE_LABELS}
+    if not path.exists():
+        return counts
+    with path.open(newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            t_min = float(row["time_real"]) / 60.0
+            if t_min <= PHASE_BOUNDARIES_MIN[0]:
+                counts["I"] += 1
+            elif t_min <= PHASE_BOUNDARIES_MIN[1]:
+                counts["II"] += 1
+            else:
+                counts["III"] += 1
+    return counts
+
+
+def style_kinetic_axis(axis) -> None:
+    axis.set_facecolor("white")
+    show_all_spines(axis)
+    axis.tick_params(axis="both", labelsize=TICK_LABEL_FONTSIZE - 1, pad=4)
+
+
+def render_panel_c_sqrt(axis, plot_times: list[float], median_counts: np.ndarray) -> None:
+    """Phase I: median cumulative count vs sqrt(t) with linear fit."""
+    t = np.asarray(plot_times, dtype=float)
+    sqrt_t = np.sqrt(t)
+    axis.scatter(sqrt_t, median_counts, s=18, color=COUNT_COLOR, alpha=0.35, edgecolors="none")
+    a, b, r2 = fit_sqrt_phase_i(plot_times, median_counts)
+    fit_x = np.linspace(0, np.sqrt(PHASE_BOUNDARIES_MIN[0]), 100)
+    axis.plot(fit_x, a * fit_x + b, color=FIT_LINE_COLOR, linewidth=2.0, linestyle="--")
+    axis.set_xlabel(r"$\sqrt{t}$ (min$^{1/2}$)", fontsize=AXIS_LABEL_FONTSIZE - 1)
+    axis.set_ylabel("LNP count (median)", fontsize=AXIS_LABEL_FONTSIZE - 1, color=COUNT_COLOR)
+    axis.tick_params(axis="y", labelcolor=COUNT_COLOR)
+    style_kinetic_axis(axis)
+    axis.text(
+        0.04,
+        0.96,
+        f"$N \\approx {a:.0f}\\sqrt{{t}}$\n$R^2={r2:.2f}$",
+        transform=axis.transAxes,
+        ha="left",
+        va="top",
+        fontsize=TICK_LABEL_FONTSIZE - 1,
+        bbox={"facecolor": "white", "edgecolor": "0.8", "alpha": 0.9, "pad": 3},
+    )
+    axis.set_title("transport-limited", fontsize=TICK_LABEL_FONTSIZE - 1, pad=6)
+
+
+def render_panel_c_clustering(
+    axis,
+    plot_times: list[float],
+    median_counts: np.ndarray,
+    median_intensity: np.ndarray,
+) -> None:
+    """Phase II: normalized count rate vs. intensity rise (clustering signature)."""
+    t = np.asarray(plot_times, dtype=float)
+    phase_ii = (t >= PHASE_BOUNDARIES_MIN[0]) & (t <= PHASE_BOUNDARIES_MIN[1])
+    if phase_ii.sum() < 2:
+        style_kinetic_axis(axis)
+        axis.set_title("site-limited clustering", fontsize=TICK_LABEL_FONTSIZE - 1, pad=6)
+        return
+
+    counts = median_counts[phase_ii]
+    intensity = median_intensity[phase_ii]
+    t_ii = t[phase_ii]
+    count_norm = (counts - counts.min()) / max(counts.max() - counts.min(), 1e-6)
+    intensity_norm = (intensity - np.nanmin(intensity)) / max(
+        np.nanmax(intensity) - np.nanmin(intensity), 1e-6
+    )
+    axis.plot(t_ii, count_norm, color=COUNT_COLOR, linewidth=2.0, label="count (norm.)")
+    axis.plot(t_ii, intensity_norm, color=INTENSITY_COLOR, linewidth=2.0, label="intensity (norm.)")
+    axis.set_xlim(PHASE_BOUNDARIES_MIN[0], PHASE_BOUNDARIES_MIN[1])
+    axis.set_xlabel("time (min)", fontsize=AXIS_LABEL_FONTSIZE - 1)
+    axis.set_ylabel("normalized level", fontsize=AXIS_LABEL_FONTSIZE - 1)
+    style_kinetic_axis(axis)
+    axis.legend(fontsize=LEGEND_FONTSIZE - 1, loc="center right", frameon=True)
+    axis.set_title("site-limited clustering", fontsize=TICK_LABEL_FONTSIZE - 1, pad=6)
+
+
+def render_panel_c_merges(axis, merge_by_phase: dict[str, int]) -> None:
+    """Strict coalescence events from 4 s particle tracking, binned by phase."""
+    labels = list(PHASE_LABELS)
+    values = [merge_by_phase[label] for label in labels]
+    xpos = np.arange(len(labels))
+    bars = axis.bar(xpos, values, color=MERGE_BAR_COLOR, width=0.55, edgecolor="black", linewidth=0.6)
+    axis.set_xticks(xpos, labels)
+    axis.set_xlabel("kinetic phase", fontsize=AXIS_LABEL_FONTSIZE - 1)
+    axis.set_ylabel("strict merge events", fontsize=AXIS_LABEL_FONTSIZE - 1)
+    axis.set_ylim(0, max(values + [1]) * 1.25)
+    style_kinetic_axis(axis)
+    for bar, value in zip(bars, values):
+        axis.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.15,
+            str(value),
+            ha="center",
+            va="bottom",
+            fontsize=TICK_LABEL_FONTSIZE - 1,
+        )
+    axis.set_title("4 s tracking", fontsize=TICK_LABEL_FONTSIZE - 1, pad=6)
+    axis.text(
+        0.98,
+        0.96,
+        f"total = {sum(values)}",
+        transform=axis.transAxes,
+        ha="right",
+        va="top",
+        fontsize=TICK_LABEL_FONTSIZE - 2,
+        color=PHASE_LINE_COLOR,
+    )
+
+
 def render_placeholder(
     axis,
     image_shape: tuple[int, int],
@@ -363,15 +499,26 @@ def render_early(
     filtered_dir: Path,
     output_png: Path,
     output_svg: Path,
+    *,
+    stage_counts_csv: Path | None = None,
+    intensity_filtered_dir: Path | None = None,
+    merge_events_csv: Path | None = None,
     position: int = 0,
     channel: int = 1,
     time_unit: str = "min",
 ) -> None:
     rois, grouped = read_counts_csv(counts_csv)
-    selected_roi = auto_select_roi(grouped)
-    selected_time = auto_select_time_early(grouped, selected_roi)
+    stage_grouped = grouped
+    if stage_counts_csv is not None and stage_counts_csv != counts_csv:
+        _, stage_grouped = read_counts_csv(stage_counts_csv)
 
-    n_frames = len(grouped[selected_roi][1])
+    selected_roi = auto_select_roi(stage_grouped)
+    selected_time = auto_select_time_early(stage_grouped, selected_roi)
+
+    fluo_stack = load_roi_stack(input_dir, position, selected_roi, channel)
+    bf_stack = load_roi_stack(input_dir, position, selected_roi, 0)
+    n_frames = int(fluo_stack.shape[0])
+
     mid_time = select_frame_fraction_time(n_frames, 0.5)
     late_time = select_frame_fraction_time(n_frames, 0.9)
     stage_times = [
@@ -379,9 +526,6 @@ def render_early(
         (mid_time, "middle", "ii"),
         (late_time, "late", "iii"),
     ]
-
-    fluo_stack = load_roi_stack(input_dir, position, selected_roi, channel)
-    bf_stack = load_roi_stack(input_dir, position, selected_roi, 0)
 
     if time_unit not in {"sec", "min"}:
         raise ValueError("--time-unit must be 'sec' or 'min'")
@@ -391,13 +535,13 @@ def render_early(
     matplotlib.use("Agg")
     from matplotlib import pyplot as plt
 
-    fig = plt.figure(figsize=(11.5, 15.5), facecolor="white")
+    fig = plt.figure(figsize=(11.5, 16.0), facecolor="white")
     gs = fig.add_gridspec(
         4,
         3,
-        height_ratios=[1.0, 1.0, 1.0, 0.85],
-        hspace=0.4,
-        wspace=0.12,
+        height_ratios=[1.0, 1.0, 0.72, 0.88],
+        hspace=0.42,
+        wspace=0.28,
         left=0.09,
         right=0.90,
         bottom=0.06,
@@ -437,24 +581,72 @@ def render_early(
     for axis, (_, _, sub_label) in zip(axis_b_axes, stage_times):
         add_panel_label(axis, sub_label, x=0.04)
 
-    # ---- Row C: blank placeholders (same footprint as rows A/B) ----
-    image_shape = np.asarray(fluo_stack[0]).shape
-    for axis, (_, title, sub_label) in zip(axis_c_axes, stage_times):
-        render_placeholder(axis, image_shape, title=title)
+    # ---- Row C: kinetic analysis (theory + 4 s tracking) ----
+    reference_times = grouped[rois[0]][0]
+    plot_times = to_plot_time(reference_times, time_unit)
+    count_matrix = np.array([grouped[roi_index][1] for roi_index in rois], dtype=float)
+    median_counts = np.median(count_matrix, axis=0)
+
+    intensity_dir = intensity_filtered_dir or filtered_dir
+    intensity_matrix = np.array(
+        [per_cell_median_intensity_series(intensity_dir, roi_index, reference_times) for roi_index in rois]
+    )
+    median_intensity = np.nanmedian(intensity_matrix, axis=0)
+    merge_by_phase = read_merge_events_by_phase(merge_events_csv or Path())
+
+    render_panel_c_sqrt(axis_c_axes[0], plot_times, median_counts)
+    render_panel_c_clustering(axis_c_axes[1], plot_times, median_counts, median_intensity)
+    render_panel_c_merges(axis_c_axes[2], merge_by_phase)
     add_panel_label(axis_c_axes[0], "C")
-    for axis, (_, _, sub_label) in zip(axis_c_axes, stage_times):
+    for axis, sub_label in zip(axis_c_axes, ("i", "ii", "iii")):
         add_panel_label(axis, sub_label, x=0.04)
 
     # ---- Row D: dual-axis, one line per cell (low opacity) + across-cell median (opaque) ----
-    reference_times = grouped[rois[0]][0]
-    plot_times = to_plot_time(reference_times, time_unit)
     n_times = len(reference_times)
 
-    count_matrix = np.array([grouped[roi_index][1] for roi_index in rois], dtype=float)
     for row in count_matrix:
         axis_d.plot(plot_times, row, color=COUNT_COLOR, linewidth=1.0, alpha=PER_CELL_ALPHA)
-    median_counts = np.median(count_matrix, axis=0)
     axis_d.plot(plot_times, median_counts, color=COUNT_COLOR, linewidth=2.0)
+
+    sqrt_a, sqrt_b, sqrt_r2 = fit_sqrt_phase_i(plot_times, median_counts)
+    phase_i_mask = np.asarray(plot_times) <= PHASE_BOUNDARIES_MIN[0]
+    if phase_i_mask.any():
+        fit_t = np.linspace(0, PHASE_BOUNDARIES_MIN[0], 100)
+        axis_d.plot(
+            fit_t,
+            sqrt_a * np.sqrt(fit_t) + sqrt_b,
+            color=FIT_LINE_COLOR,
+            linewidth=1.8,
+            linestyle="--",
+            label=rf"$\sqrt{{t}}$ fit ($R^2={sqrt_r2:.2f}$)",
+            zorder=2,
+        )
+    n_sat = float(np.median(median_counts[np.asarray(plot_times) > PHASE_BOUNDARIES_MIN[1]]))
+    axis_d.axhline(
+        n_sat,
+        color=COUNT_COLOR,
+        linewidth=1.2,
+        linestyle=":",
+        alpha=0.7,
+        label=rf"$N_{{\mathrm{{sat}}}}\approx{n_sat:.0f}$",
+        zorder=1,
+    )
+
+    if merge_events_csv is not None and merge_events_csv.exists():
+        merge_times = []
+        with merge_events_csv.open(newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                merge_times.append(float(row["time_real"]) / 60.0)
+        y0, y1 = axis_d.get_ylim()
+        for t_merge in merge_times:
+            axis_d.plot(
+                [t_merge, t_merge],
+                [y1 * 0.98, y1],
+                color=MERGE_BAR_COLOR,
+                linewidth=1.0,
+                alpha=0.55,
+                zorder=0,
+            )
 
     x_label = "time (min)" if time_unit == "min" else "time (s)"
     axis_d.set_xlabel(x_label, fontsize=AXIS_LABEL_FONTSIZE)
@@ -465,9 +657,6 @@ def render_early(
     axis_d.tick_params(axis="y", labelcolor=COUNT_COLOR)
     add_phase_markers(axis_d, float(plot_times[-1]) if plot_times else PHASE_BOUNDARIES_MIN[-1] + 10.0)
 
-    intensity_matrix = np.array(
-        [per_cell_median_intensity_series(filtered_dir, roi_index, reference_times) for roi_index in rois]
-    )
     axis_d2 = axis_d.twinx()
     show_all_spines(axis_d2)
     for row in intensity_matrix:
@@ -482,6 +671,8 @@ def render_early(
     legend_handles = [
         Line2D([0], [0], color=COUNT_COLOR, linewidth=2.0, label="LNP count (median)"),
         Line2D([0], [0], color=INTENSITY_COLOR, linewidth=2.0, label="LNP intensity (median)"),
+        Line2D([0], [0], color=FIT_LINE_COLOR, linewidth=1.8, linestyle="--", label=r"phase I $\sqrt{t}$ fit"),
+        Line2D([0], [0], color=MERGE_BAR_COLOR, linewidth=1.0, label="strict merge (4 s)"),
     ]
     axis_d.legend(
         handles=legend_handles,
@@ -507,14 +698,16 @@ def render_early(
 
 
 if __name__ == "__main__":
-    DATA_DIR = Path("/home/jack/data/lisca_review/fig5/20260324_1")
-    COUNTS_CSV = DATA_DIR / "results" / "spot_counts_position000_channel001.csv"
-    FILTERED_DIR = DATA_DIR / "results" / "filtered"
+    DATA_4S = Path("/home/jack/data/lisca_review/fig5/20260324_1_4s")
+    DATA_40S = Path("/home/jack/data/lisca_review/fig5/20260324_1")
     OUT_SVG = Path("/home/jack/workspace/lisca-paper/figs/fig5.svg")
     render_early(
-        input_dir=DATA_DIR,
-        counts_csv=COUNTS_CSV,
-        filtered_dir=FILTERED_DIR,
+        input_dir=DATA_4S,
+        counts_csv=DATA_40S / "results" / "spot_counts_position000_channel001.csv",
+        stage_counts_csv=DATA_4S / "results" / "spot_counts_per_frame_position000_channel001.csv",
+        filtered_dir=DATA_4S / "results" / "filtered_4s",
+        intensity_filtered_dir=DATA_40S / "results" / "filtered",
+        merge_events_csv=DATA_4S / "results" / "tracking_4s" / "cluster_merge_events_strict.csv",
         output_png=OUT_SVG,
         output_svg=OUT_SVG,
         position=0,

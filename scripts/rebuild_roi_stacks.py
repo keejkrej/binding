@@ -12,11 +12,24 @@ from tqdm import tqdm
 from binding.core.frames import available_times, load_stack
 
 
+def _expected_planes(time_count: int, channel_count: int, z_count: int) -> int:
+    return time_count * channel_count * z_count
+
+
+def _roi_is_complete(path: Path, expected_planes: int) -> bool:
+    if not path.exists():
+        return False
+    with tifffile.TiffFile(path) as tf:
+        return len(tf.pages) == expected_planes
+
+
 def rebuild_rois(
     data_dir: Path,
     *,
     position: int = 0,
     source_index: Path | None = None,
+    skip_complete: bool = True,
+    roi_ids: list[int] | None = None,
 ) -> None:
     index_path = source_index or (data_dir / "roi" / f"Pos{position}" / "index.json")
     if not index_path.exists():
@@ -32,8 +45,25 @@ def rebuild_rois(
     roi_dir = data_dir / "roi" / f"Pos{position}"
     roi_dir.mkdir(parents=True, exist_ok=True)
 
+    expected_planes = _expected_planes(len(times), int(index.get("channelCount", 2)), 1)
+
     for entry in index["rois"]:
         roi_id = int(entry["roi"])
+        if roi_ids is not None and roi_id not in roi_ids:
+            continue
+
+        out_path = roi_dir / entry["fileName"]
+        if skip_complete and _roi_is_complete(out_path, expected_planes):
+            entry["shape"] = [
+                len(times),
+                int(index.get("channelCount", 2)),
+                1,
+                int(entry["bbox"]["h"]),
+                int(entry["bbox"]["w"]),
+            ]
+            print(f"Skip Roi{roi_id} (already {expected_planes} planes)")
+            continue
+
         bbox = entry["bbox"]
         x0 = int(bbox["x"])
         y0 = int(bbox["y"])
@@ -55,7 +85,6 @@ def rebuild_rois(
             frames.append(crop)
 
         stack = np.stack(frames, axis=0)[:, :, np.newaxis, :, :]
-        out_path = roi_dir / entry["fileName"]
         flat = stack.reshape(-1, stack.shape[-2], stack.shape[-1])
         tifffile.imwrite(out_path, flat, photometric="minisblack")
 
@@ -78,8 +107,26 @@ def main() -> None:
         default=None,
         help="Existing index.json with bbox entries (defaults to data_dir/roi/PosN/index.json).",
     )
+    parser.add_argument(
+        "--no-skip-complete",
+        action="store_true",
+        help="Rebuild all ROIs even if full-time stacks already exist.",
+    )
+    parser.add_argument(
+        "--roi",
+        type=int,
+        action="append",
+        default=None,
+        help="Only rebuild these ROI ids (repeatable).",
+    )
     args = parser.parse_args()
-    rebuild_rois(args.data_dir, position=args.position, source_index=args.source_index)
+    rebuild_rois(
+        args.data_dir,
+        position=args.position,
+        source_index=args.source_index,
+        skip_complete=not args.no_skip_complete,
+        roi_ids=args.roi,
+    )
 
 
 if __name__ == "__main__":
