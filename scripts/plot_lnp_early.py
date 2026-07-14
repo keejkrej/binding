@@ -1,19 +1,12 @@
-"""Regenerate fig5 as a four-row figure.
+"""Regenerate fig5 as a five-row figure.
 
-Row A: three stages (early/middle/late) of the fluorescence image of the ROI
-(rhodamine-labeled lipid channel).
-Row B: the same three stages rendered as white background + BF-derived cell
-contour + intensity-scaled LNP circles.
-Row C: kinetic analysis from theory and 4 s tracking -- (i) phase I sqrt(t)
-scaling, (ii) phase II count slowdown vs. intensity rise, (iii) strict
-coalescence events by phase from particle tracking.
-Row D: dual-axis time course, one line per cell (low opacity) plus the
-across-cell median (opaque) on each axis -- left axis: LNP count per cell
-(red); right axis: median LNP intensity per cell (blue), with vertical phase
-boundaries at 30 and 80 min (adsorption, clustering, saturation). Dashed red
-curve: sqrt(t) fit in phase I; dotted line: saturation level.
+Row A: three stages (early/middle/late) of the fluorescence image of the ROI.
+Row B: spotiflow detections + Cellpose contours on white.
+Row C: kinetic phase cartoons (i early/phase I, ii middle/phase II, iii late/III).
+Row D: quantitative kinetic validation from theory and 4 s tracking.
+Row E: dual-axis time course with phase boundaries and model overlays.
 
-Writes both PNG and SVG to the paper figs dir.
+Writes SVG to the paper figs dir.
 """
 from __future__ import annotations
 
@@ -51,6 +44,13 @@ PHASE_LINE_COLOR = "#555555"
 FIT_LINE_COLOR = "#8b0000"
 MERGE_BAR_COLOR = "#6a0572"
 CLUSTER_COLOR = "#2ca02c"
+CARTOON_LNP = "#d7263d"
+CARTOON_CELL = "#c8d6e5"
+CARTOON_CELL_EDGE = "#0b2545"
+CARTOON_BULK = "#eef4fb"
+CARTOON_SITE_OPEN = "#ffffff"
+CARTOON_SITE_FILL = "#f4a3b0"
+CARTOON_ARROW = "#555555"
 
 
 def to_plot_time(values: list[float], unit: str) -> list[float]:
@@ -289,6 +289,107 @@ def render_detections_white(
             fontsize=TICK_LABEL_FONTSIZE,
             color="black",
         )
+
+
+def render_phase_cartoon(axis, phase: str, *, title: str | None = None) -> None:
+    """Prototype schematic for one kinetic phase (cartoon row C)."""
+    axis.set_xlim(0, 10)
+    axis.set_ylim(0, 8)
+    axis.set_aspect("equal")
+    axis.axis("off")
+    axis.set_facecolor("white")
+
+    # Channel bulk (top) and micropattern cell (bottom)
+    axis.add_patch(
+        patches.Rectangle((0.4, 4.6), 9.2, 2.8, facecolor=CARTOON_BULK, edgecolor="#9fb3c8", linewidth=1.0)
+    )
+    axis.text(5.0, 7.15, "LNP suspension ($c_0$)", ha="center", va="center", fontsize=TICK_LABEL_FONTSIZE - 2)
+    cell = patches.FancyBboxPatch(
+        (2.2, 0.8),
+        5.6,
+        3.0,
+        boxstyle="round,pad=0.08,rounding_size=0.35",
+        facecolor=CARTOON_CELL,
+        edgecolor=CARTOON_CELL_EDGE,
+        linewidth=1.8,
+    )
+    axis.add_patch(cell)
+    axis.text(5.0, 3.55, "cell membrane", ha="center", va="center", fontsize=TICK_LABEL_FONTSIZE - 3, color=CARTOON_CELL_EDGE)
+
+    def lnp(x: float, y: float, r: float = 0.11, *, filled: bool = True) -> None:
+        axis.add_patch(
+            patches.Circle(
+                (x, y),
+                r,
+                facecolor=CARTOON_LNP if filled else "none",
+                edgecolor=CARTOON_LNP,
+                linewidth=1.0,
+                alpha=0.95 if filled else 0.8,
+            )
+        )
+
+    def arrow(x0: float, y0: float, x1: float, y1: float) -> None:
+        axis.annotate(
+            "",
+            xy=(x1, y1),
+            xytext=(x0, y0),
+            arrowprops={"arrowstyle": "->", "color": CARTOON_ARROW, "lw": 1.0, "shrinkA": 0, "shrinkB": 0},
+        )
+
+    if phase == "I":
+        bulk_positions = [(1.5, 6.2), (3.0, 6.8), (4.8, 5.9), (6.2, 6.6), (7.8, 6.0), (8.5, 6.9)]
+        for x, y in bulk_positions:
+            lnp(x, y, 0.10)
+            arrow(x, y - 0.05, x + (5.0 - x) * 0.15, 4.35)
+        for x in (3.4, 5.0, 6.6):
+            lnp(x, 2.5, 0.09)
+        axis.text(5.0, 0.35, r"diffusion-limited: $N \propto \sqrt{t}$", ha="center", fontsize=TICK_LABEL_FONTSIZE - 2)
+        subtitle = "bulk transport → sparse binding"
+    elif phase == "II":
+        for x, y in [(2.0, 6.1), (4.0, 6.5), (7.0, 6.2)]:
+            lnp(x, y, 0.09)
+            arrow(x, y - 0.05, x + (5.0 - x) * 0.12, 4.2)
+        membrane_lnps = [(2.8, 2.3), (3.5, 2.8), (4.2, 2.2), (5.4, 2.6), (6.3, 2.3), (7.0, 2.7)]
+        for x, y in membrane_lnps:
+            lnp(x, y, 0.10)
+        # coalescence cue
+        lnp(4.8, 2.45, 0.14)
+        axis.add_patch(
+            patches.FancyArrowPatch(
+                (3.6, 2.55),
+                (4.65, 2.45),
+                arrowstyle="->",
+                mutation_scale=10,
+                color=CARTOON_ARROW,
+                linewidth=1.2,
+            )
+        )
+        axis.text(5.0, 0.35, "site-limited: $(N_{\\max}-N)$ + clustering", ha="center", fontsize=TICK_LABEL_FONTSIZE - 2)
+        subtitle = "fewer new spots, brighter merges"
+    else:
+        # phase III — saturation
+        for x in np.linspace(2.5, 7.5, 9):
+            lnp(float(x), 2.35 + 0.15 * np.sin(x), 0.11)
+        for x, y in [(3.0, 2.75), (5.0, 2.85), (6.8, 2.7)]:
+            lnp(x, y, 0.15)
+        axis.text(5.0, 0.35, r"saturation: $N \to N_{\mathrm{sat}}$", ha="center", fontsize=TICK_LABEL_FONTSIZE - 2)
+        subtitle = "sites occupied, count plateau"
+
+    axis.text(
+        0.08,
+        0.97,
+        f"phase {phase}",
+        transform=axis.transAxes,
+        ha="left",
+        va="top",
+        fontsize=TICK_LABEL_FONTSIZE,
+        fontweight="bold",
+        color=PHASE_LINE_COLOR,
+    )
+    if title:
+        axis.text(5.0, 7.85, title, ha="center", va="top", fontsize=TICK_LABEL_FONTSIZE - 1, color="black")
+    axis.text(5.0, 0.08, subtitle, ha="center", va="bottom", fontsize=TICK_LABEL_FONTSIZE - 3, color=PHASE_LINE_COLOR)
+    add_panel_border(axis)
 
 
 def fit_sqrt_phase_i(
@@ -535,22 +636,23 @@ def render_early(
     matplotlib.use("Agg")
     from matplotlib import pyplot as plt
 
-    fig = plt.figure(figsize=(11.5, 16.0), facecolor="white")
+    fig = plt.figure(figsize=(11.5, 18.5), facecolor="white")
     gs = fig.add_gridspec(
-        4,
+        5,
         3,
-        height_ratios=[1.0, 1.0, 0.72, 0.88],
-        hspace=0.42,
+        height_ratios=[1.0, 1.0, 0.55, 0.72, 0.88],
+        hspace=0.38,
         wspace=0.28,
         left=0.09,
         right=0.90,
-        bottom=0.06,
+        bottom=0.05,
         top=0.96,
     )
     axis_a_axes = [fig.add_subplot(gs[0, i]) for i in range(3)]
     axis_b_axes = [fig.add_subplot(gs[1, i]) for i in range(3)]
     axis_c_axes = [fig.add_subplot(gs[2, i]) for i in range(3)]
-    axis_d = fig.add_subplot(gs[3, :])
+    axis_d_axes = [fig.add_subplot(gs[3, i]) for i in range(3)]
+    axis_e = fig.add_subplot(gs[4, :])
 
     # ---- Row A: three stages of the raw fluorescence image (rhodamine-labeled LNP) ----
     for axis, (time_index, title, sub_label) in zip(axis_a_axes, stage_times):
@@ -581,7 +683,19 @@ def render_early(
     for axis, (_, _, sub_label) in zip(axis_b_axes, stage_times):
         add_panel_label(axis, sub_label, x=0.04)
 
-    # ---- Row C: kinetic analysis (theory + 4 s tracking) ----
+    # ---- Row C: kinetic phase cartoons (prototype schematics) ----
+    cartoon_stages = [
+        ("I", "early"),
+        ("II", "middle"),
+        ("III", "late"),
+    ]
+    for axis, (phase, title) in zip(axis_c_axes, cartoon_stages):
+        render_phase_cartoon(axis, phase, title=title)
+    add_panel_label(axis_c_axes[0], "C")
+    for axis, sub_label in zip(axis_c_axes, ("i", "ii", "iii")):
+        add_panel_label(axis, sub_label, x=0.04)
+
+    # ---- Row D: kinetic analysis (theory + 4 s tracking) ----
     reference_times = grouped[rois[0]][0]
     plot_times = to_plot_time(reference_times, time_unit)
     count_matrix = np.array([grouped[roi_index][1] for roi_index in rois], dtype=float)
@@ -594,14 +708,15 @@ def render_early(
     median_intensity = np.nanmedian(intensity_matrix, axis=0)
     merge_by_phase = read_merge_events_by_phase(merge_events_csv or Path())
 
-    render_panel_c_sqrt(axis_c_axes[0], plot_times, median_counts)
-    render_panel_c_clustering(axis_c_axes[1], plot_times, median_counts, median_intensity)
-    render_panel_c_merges(axis_c_axes[2], merge_by_phase)
-    add_panel_label(axis_c_axes[0], "C")
-    for axis, sub_label in zip(axis_c_axes, ("i", "ii", "iii")):
+    render_panel_c_sqrt(axis_d_axes[0], plot_times, median_counts)
+    render_panel_c_clustering(axis_d_axes[1], plot_times, median_counts, median_intensity)
+    render_panel_c_merges(axis_d_axes[2], merge_by_phase)
+    add_panel_label(axis_d_axes[0], "D")
+    for axis, sub_label in zip(axis_d_axes, ("i", "ii", "iii")):
         add_panel_label(axis, sub_label, x=0.04)
 
-    # ---- Row D: dual-axis, one line per cell (low opacity) + across-cell median (opaque) ----
+    # ---- Row E: dual-axis time course ----
+    axis_d = axis_e
     n_times = len(reference_times)
 
     for row in count_matrix:
@@ -683,7 +798,7 @@ def render_early(
         edgecolor="0.8",
         framealpha=0.9,
     )
-    add_bottom_panel_label(axis_d, "D")
+    add_bottom_panel_label(axis_d, "E")
 
     output_svg.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_svg, format="svg", facecolor="white")
